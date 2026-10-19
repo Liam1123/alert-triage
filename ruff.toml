@@ -1,0 +1,14 @@
+# Lint settings for `ruff check .` (run locally and in CI). The code is not
+# auto-formatted; this only catches real problems.
+
+# Matches how the code is written: lines run to about 120 characters. Ruff
+# doesn't enforce line length with these rules; this only sets the width it
+# uses when it suggests a rewrapped import.
+line-length = 120
+
+# The oldest Python the README supports.
+target-version = "py311"
+
+[lint]
+# datetime.UTC is the same object as timezone.utc; switching is style only.
+ignore = ["UP017"]

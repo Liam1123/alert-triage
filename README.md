@@ -1,5 +1,7 @@
 # Alert Triage Assistant
 
+[![tests](https://github.com/Liam1123/alert-triage/actions/workflows/tests.yml/badge.svg)](https://github.com/Liam1123/alert-triage/actions/workflows/tests.yml)
+
 An alert enrichment and triage assistant for SOC analysts. It takes an EDR-style alert (JSON), enriches its indicators with threat intel APIs, maps the process behavior to MITRE ATT&CK techniques, and returns a structured triage result with a verdict and the reasons behind it.
 
 **Sources:** VirusTotal (file hashes, IPs, domains) and AbuseIPDB (IPs). Results are cached locally in SQLite for 24 hours.
@@ -220,3 +222,17 @@ python -m pytest -v
 ```
 
 The tests mock every HTTP call with respx, so they never contact any real API and need no API keys. They also use a temporary cache file, never the real one.
+
+### Lint, rules check, and CI
+
+```bash
+pip install -r requirements-dev.txt   # adds ruff
+ruff check .                          # lint (settings in ruff.toml; the code is not auto-formatted)
+python scripts/check_rules.py         # rules load and every technique ID is in the ATT&CK data
+```
+
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs on every push and pull request:
+
+- **Lint and rules check:** ruff, then `scripts/check_rules.py`. It's a separate job, so a bad rule fails the build even if the tests are skipped.
+- **Tests:** pytest on Python 3.14 (the development version) and 3.12. `VT_API_KEY` and `ABUSEIPDB_API_KEY` are set to empty, to prove the tests need no secrets.
+- **Secret scan:** [gitleaks](https://github.com/gitleaks/gitleaks-action) scans the pushed commits, so a committed API key fails the build. If one ever lands, rotate the key; removing the commit doesn't un-leak it.

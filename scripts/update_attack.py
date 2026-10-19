@@ -11,7 +11,7 @@ one-line summary when it finishes.
 """
 
 import json
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -83,7 +83,7 @@ def build_lookup(objects: list[dict]) -> dict:
     return {
         "source": STIX_URL,
         "attack_version": collection.get("x_mitre_version", "unknown"),
-        "generated": date.today().isoformat(),
+        "generated": datetime.now(timezone.utc).date().isoformat(),  # UTC, so it's the same date anywhere.
         "tactic_order": tactic_order,
         "techniques": techniques,
     }

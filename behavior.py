@@ -9,7 +9,7 @@ import re
 from pathlib import Path, PureWindowsPath
 
 import attack
-from models import Alert, BehaviorFinding, Decoder, Severity, Verdict, VERDICT_RANK
+from models import VERDICT_RANK, Alert, BehaviorFinding, Decoder, Severity, Verdict
 from rules import Match, Rule, load_rules
 
 # How each rule severity affects the verdict. Low findings are listed for

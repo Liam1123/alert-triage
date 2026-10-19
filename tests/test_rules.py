@@ -111,3 +111,28 @@ def test_missing_rules_list(tmp_path):
     path.write_text("- id: x\n")
     with pytest.raises(RuleError, match="top-level 'rules:' list"):
         load_rules(path)
+
+
+# --- scripts/check_rules.py (run on its own in CI) ---------------------------
+
+def test_check_rules_script_passes_on_the_real_rules():
+    from scripts import check_rules
+
+    assert check_rules.problems() == []
+
+
+def test_check_rules_script_reports_unknown_technique(tmp_path):
+    from scripts import check_rules
+
+    path = write_rules(tmp_path, VALID_RULE.replace("[T1059.001]", "[T1059.001, T9999]"))
+
+    assert check_rules.problems(path) == ["Rule 'test_rule': technique T9999 is not in attack_techniques.json"]
+
+
+def test_check_rules_script_reports_invalid_rules(tmp_path):
+    from scripts import check_rules
+
+    path = write_rules(tmp_path, VALID_RULE.replace("'foo'", "'(unclosed'"))
+
+    [problem] = check_rules.problems(path)
+    assert "Invalid rule 'test_rule'" in problem
