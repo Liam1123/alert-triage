@@ -1,0 +1,10 @@
+{
+  "hostname": "WS-ACCT-0417",
+  "user": "LAB\\r.okafor",
+  "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+  "file_path": "C:\\Users\\r.okafor\\Downloads\\invoice_q3.com",
+  "command_line": "C:\\Users\\r.okafor\\Downloads\\invoice_q3.com",
+  "parent_process": "C:\\Windows\\explorer.exe",
+  "remote_ip": "203.0.113.45",
+  "domain": "files.invoice-portal.example"
+}

@@ -1,0 +1,10 @@
+{
+  "hostname": "SRV-BUILD-02",
+  "user": "LAB\\svc_buildagent",
+  "sha256": "4ebdea8d8be8507ece23d9c491d1c3c838fc94047f7c263ff3b482d9e8cf566c",
+  "file_path": "C:\\ProgramData\\BuildTools\\cache\\helper_x64.exe",
+  "command_line": "helper_x64.exe --sync --quiet",
+  "parent_process": "C:\\Windows\\System32\\svchost.exe",
+  "remote_ip": "198.51.100.23",
+  "domain": "mirror.build-cache.example"
+}
