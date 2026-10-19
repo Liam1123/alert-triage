@@ -39,13 +39,30 @@ def main() -> int:
 def print_result(result: TriageResult) -> None:
     print("=" * 60)
     print(f"VERDICT: {result.verdict.upper()}")
+    print(f"Tactics: {', '.join(result.tactics) if result.tactics else '(none)'}")
     print("=" * 60)
 
+    print("\nEnrichments")
     if not result.enrichments:
-        print("  (no enrichments)")
+        print("  (none)")
     for e in result.enrichments:
         print(f"  {_origin(e):<7} {e.source:<10} {e.indicator_type:<7} {e.indicator}")
         print(f"          -> {_summary(e)}")
+
+    print("\nBehavior")
+    if not result.behavior_findings:
+        print("  (no rules matched)")
+    for f in result.behavior_findings:
+        decoded = " (in decoded command)" if f.from_decoded else ""
+        print(f"  [{f.severity.upper():<6}] {f.rule_name}{decoded}")
+        for t in f.techniques:
+            print(f"           {t.id:<10} {t.name}")
+        print(f"           evidence: {f.evidence}")
+
+    if result.decoded_command:
+        print("\nDecoded command")
+        for line in result.decoded_command.splitlines():
+            print(f"  {line}")
 
     print("\nReasons")
     for reason in result.reasons:

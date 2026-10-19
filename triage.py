@@ -1,11 +1,21 @@
-"""Triage logic: enrich an alert's indicators and decide on a verdict."""
+"""Triage logic: enrich indicators, analyze behavior, and decide on a verdict."""
 
 from collections.abc import Callable
 from typing import NamedTuple
 
+import attack
+import behavior
 from cache import Cache
 from enrichers import abuseipdb, virustotal
-from models import Alert, EnrichmentResult, IndicatorType, TriageResult, Verdict
+from models import (
+    VERDICT_RANK,
+    Alert,
+    BehaviorFinding,
+    EnrichmentResult,
+    IndicatorType,
+    TriageResult,
+    Verdict,
+)
 
 # VirusTotal: this many engines or more → malicious; 1 up to this → suspicious.
 VT_MALICIOUS_THRESHOLD = 5
@@ -14,10 +24,8 @@ VT_MALICIOUS_THRESHOLD = 5
 ABUSEIPDB_MALICIOUS_SCORE = 75  # score >= 75 → malicious
 ABUSEIPDB_SUSPICIOUS_SCORE = 25  # 25-74 → suspicious, below 25 → clean
 
-# Higher number = worse. The overall verdict is the worst individual verdict.
-# "unknown" outranks "clean": if we couldn't check something, we can't call
-# the whole alert clean.
-SEVERITY: dict[Verdict, int] = {"clean": 0, "unknown": 1, "suspicious": 2, "malicious": 3}
+# Behavior severity → verdict mapping and the escalation rule live at the
+# top of behavior.py. Verdict ranking (VERDICT_RANK) lives in models.py.
 
 
 class Enricher(NamedTuple):
@@ -38,7 +46,7 @@ ENRICHERS = [
 
 
 def triage(alert: Alert, cache: Cache | None = None) -> TriageResult:
-    """Enrich every indicator in the alert and combine the results into one verdict."""
+    """Enrich indicators, analyze behavior, and combine everything into one verdict."""
     if cache is None:
         cache = Cache()
 
@@ -61,33 +69,80 @@ def triage(alert: Alert, cache: Cache | None = None) -> TriageResult:
         if reason not in reasons:
             reasons.append(reason)
 
-    if not enrichments:
+    # Behavior analysis only counts toward the verdict if there was process
+    # data to analyze. "Ran and found nothing" is a clean result; "had nothing
+    # to look at" is no result at all.
+    findings: list[BehaviorFinding] = []
+    behavior_result: Verdict | None = None
+    if behavior.has_behavior_data(alert):
+        findings = behavior.analyze(alert)
+        behavior_result = behavior.behavior_verdict(findings)
+        reasons.extend(behavior_reasons(findings))
+
+    if not enrichments and behavior_result is None:
         return TriageResult(
             alert=alert,
             enrichments=[],
             verdict="unknown",
-            reasons=["Alert has no sha256, remote_ip, or domain, so there was nothing to enrich"],
+            reasons=["Alert has no indicators or process details, so there was nothing to analyze"],
         )
+
+    tactics = attack.order_tactics(
+        tactic for f in findings for t in f.techniques for tactic in t.tactics
+    )
 
     return TriageResult(
         alert=alert,
         enrichments=enrichments,
-        verdict=overall_verdict(enrichments),
+        verdict=overall_verdict(enrichments, behavior_result),
         reasons=reasons,
+        behavior_findings=findings,
+        decoded_command=behavior.decode_encoded_command(alert.command_line),
+        tactics=tactics,
     )
 
 
-def overall_verdict(enrichments: list[EnrichmentResult]) -> Verdict:
+def overall_verdict(
+    enrichments: list[EnrichmentResult], behavior_result: Verdict | None = None
+) -> Verdict:
     """Combine individual verdicts: the worst one wins.
 
+    Intel and behavior are treated the same way: a malicious finding from
+    either side makes the alert malicious.
+
     Skipped lookups (private IPs, reserved domains) are left out, because
-    there was nothing to check, not a failed check. If every lookup was
-    skipped, the alert is unknown.
+    there was nothing to check, not a failed check. If nothing is left,
+    the alert is unknown.
     """
     verdicts = [e.verdict for e in enrichments if e.skip_reason is None]
+    if behavior_result is not None:
+        verdicts.append(behavior_result)
     if not verdicts:
         return "unknown"
-    return max(verdicts, key=lambda verdict: SEVERITY[verdict])
+    return max(verdicts, key=lambda verdict: VERDICT_RANK[verdict])
+
+
+def behavior_reasons(findings: list[BehaviorFinding]) -> list[str]:
+    """One reason per behavior finding, plus a note if escalation kicked in."""
+    if not findings:
+        return ["behavior: no behavior rules matched"]
+
+    reasons = []
+    for f in findings:
+        technique_ids = ", ".join(t.id for t in f.techniques)
+        where = "decoded PowerShell command" if f.from_decoded else f.matched_field
+        effect = ", context only" if behavior.SEVERITY_VERDICT[f.severity] is None else ""
+        reasons.append(
+            f"behavior: {f.rule_name} [{technique_ids}] ({f.severity}{effect}) "
+            f"in {where}: {f.evidence}"
+        )
+
+    if behavior.escalation_applies(findings):
+        reasons.append(
+            f"behavior: {behavior.ESCALATION_MEDIUM_COUNT}+ different medium-severity "
+            f"findings on one alert escalate it to malicious"
+        )
+    return reasons
 
 
 def verdict_for(result: EnrichmentResult) -> tuple[Verdict, str]:

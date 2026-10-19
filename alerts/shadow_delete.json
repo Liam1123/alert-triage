@@ -1,0 +1,7 @@
+{
+  "hostname": "SRV-FILE-01",
+  "user": "LAB\\svc_backup",
+  "file_path": "C:\\Windows\\System32\\vssadmin.exe",
+  "command_line": "vssadmin.exe delete shadows /all /quiet",
+  "parent_process": "C:\\Windows\\System32\\cmd.exe"
+}

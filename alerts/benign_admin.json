@@ -1,0 +1,8 @@
+{
+  "hostname": "SRV-MGMT-03",
+  "user": "LAB\\adm.rhernandez",
+  "file_path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "command_line": "powershell.exe -NoProfile -ExecutionPolicy AllSigned -File \"C:\\Program Files\\LabOps\\Scripts\\Rotate-Logs.ps1\"",
+  "parent_process": "C:\\Windows\\System32\\svchost.exe",
+  "remote_ip": "10.20.0.15"
+}

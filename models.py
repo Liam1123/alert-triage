@@ -11,6 +11,12 @@ from pydantic import BaseModel, Field
 
 Verdict = Literal["malicious", "suspicious", "clean", "unknown"]
 IndicatorType = Literal["sha256", "ip", "domain"]
+Severity = Literal["low", "medium", "high"]
+
+# Higher number = worse. The overall verdict is the worst individual verdict.
+# "unknown" outranks "clean": if we couldn't check something, we can't call
+# the whole alert clean.
+VERDICT_RANK: dict[Verdict, int] = {"clean": 0, "unknown": 1, "suspicious": 2, "malicious": 3}
 
 
 class Alert(BaseModel):
@@ -63,6 +69,26 @@ class EnrichmentResult(BaseModel):
         return self.error is None and self.skip_reason is None
 
 
+class Technique(BaseModel):
+    """A MITRE ATT&CK technique, e.g. T1059.001 (PowerShell)."""
+
+    id: str
+    name: str
+    tactics: list[str] = []
+
+
+class BehaviorFinding(BaseModel):
+    """One behavior rule that matched the alert's process details."""
+
+    rule_id: str
+    rule_name: str
+    techniques: list[Technique]
+    severity: Severity
+    matched_field: str  # e.g. "command_line", or "parent_process, image"
+    evidence: str  # The text that matched, with a little context.
+    from_decoded: bool = False  # True if it matched decoded PowerShell, not the raw alert.
+
+
 class TriageResult(BaseModel):
     """The final output: the original alert, what we learned, and a verdict."""
 
@@ -70,3 +96,6 @@ class TriageResult(BaseModel):
     enrichments: list[EnrichmentResult]
     verdict: Verdict
     reasons: list[str]
+    behavior_findings: list[BehaviorFinding] = []
+    decoded_command: str | None = None
+    tactics: list[str] = []  # ATT&CK tactics touched, in kill-chain order.

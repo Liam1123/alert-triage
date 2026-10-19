@@ -1,6 +1,6 @@
 # Alert Triage Assistant
 
-An alert enrichment and triage assistant for SOC analysts. It takes an EDR-style alert (JSON), enriches its indicators with threat intel APIs, and returns a structured triage result with a verdict and the reasons behind it.
+An alert enrichment and triage assistant for SOC analysts. It takes an EDR-style alert (JSON), enriches its indicators with threat intel APIs, maps the process behavior to MITRE ATT&CK techniques, and returns a structured triage result with a verdict and the reasons behind it.
 
 **Sources:** VirusTotal (file hashes, IPs, domains) and AbuseIPDB (IPs). Results are cached locally in SQLite for 24 hours.
 
@@ -25,6 +25,13 @@ cp .env.example .env
 python cli.py alerts/eicar.json     # EICAR test file, expected verdict: malicious
 python cli.py alerts/unknown.json   # made-up hash, expected verdict: unknown
 python cli.py alerts/multi_indicator.json  # EICAR hash + documentation IP + .example domain
+
+# Behavior samples: no hashes, only reserved IPs/domains, so no API calls at all
+python cli.py alerts/encoded_powershell.json  # encoded PowerShell hiding a download cradle → malicious
+python cli.py alerts/certutil_download.json   # certutil -urlcache → malicious
+python cli.py alerts/shadow_delete.json       # vssadmin delete shadows → malicious
+python cli.py alerts/office_macro.json        # WINWORD spawning PowerShell → malicious
+python cli.py alerts/benign_admin.json        # signed admin script from Program Files → clean
 ```
 
 `multi_indicator.json` makes one VirusTotal call for the EICAR hash. Its IP and domain are reserved documentation values, so they are skipped and never sent to an API. Expected verdict: malicious.
@@ -42,9 +49,44 @@ Each enrichment gets its own verdict:
 
 Any error (not found, rate limited, missing key, network failure) gives that enrichment `unknown`.
 
-**Overall verdict:** the worst individual verdict, ranked `malicious > suspicious > unknown > clean`. Skipped lookups don't count toward it. A skip means there was nothing to look up, which isn't the same as a failed check. If every lookup was skipped, or the alert has no indicators, the verdict is `unknown`.
+Behavior findings map to verdicts by severity: **high → malicious**, **medium → suspicious**, **low → context only** (listed, but it doesn't change the verdict). Two or more *different* medium rules on one alert escalate to malicious. If the alert has process details and no rule matches, behavior counts as clean.
+
+**Overall verdict:** the worst individual verdict across intel and behavior, ranked `malicious > suspicious > unknown > clean`. Skipped lookups don't count toward it. A skip means there was nothing to look up, which isn't the same as a failed check. If every lookup was skipped, or the alert has no indicators, the verdict is `unknown`.
 
 **Skipped indicators:** private, loopback, link-local, multicast, reserved, and documentation IP ranges, plus reserved domains (`.example`, `.test`, `.invalid`, `.localhost`, `.local`, `.internal`, and `example.com`/`.net`/`.org`). These are never sent to any API.
+
+## Behavior rules
+
+Rules live in [`rules/behavior_rules.yaml`](rules/behavior_rules.yaml) and are validated with Pydantic at startup. A malformed rule stops the program with an error naming the rule. Each rule has an `id`, `name`, `description`, ATT&CK `techniques`, a `severity`, and a `match` group:
+
+```yaml
+- id: office_spawns_shell
+  name: Office application spawned a shell or script host
+  description: Word, Excel, PowerPoint, or Outlook launching cmd, PowerShell, ...
+  techniques: [T1566.001, T1204.002]
+  severity: high
+  match:
+    all_of:                       # every item must match
+      - field: parent_process
+        regex: '(^|\\)(winword|excel|powerpnt|outlook)\.exe$'
+      - any_of:                   # at least one must match
+          - field: image
+            regex: '^(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32)\.exe$'
+          - field: command_line
+            regex: '^"?([a-z]:\\([^"\\]+\\)*)?(cmd|powershell|...)(\.exe)?"?(\s|$)'
+```
+
+Conditions can check `command_line`, `file_path`, `parent_process`, and `image` (the process file name, taken from `file_path` or the start of the command line). Regexes are case-insensitive. Before matching, text is deobfuscated: carets (`^`) and empty quote pairs (`""`) are removed and whitespace is collapsed.
+
+**Encoded PowerShell:** when a PowerShell command line uses `-EncodedCommand` (or `-e`, `-enc`, ...), the base64 is decoded as UTF-16LE (falling back to UTF-8) and the rules run again on the decoded script. The decoded text appears in the output. It is size-capped and never executed.
+
+**ATT&CK data:** technique names and tactics come from [`data/attack_techniques.json`](data/attack_techniques.json), generated from MITRE's official STIX data. To refresh it after a new ATT&CK release:
+
+```bash
+python scripts/update_attack.py
+```
+
+A test checks that every technique ID in the rules file exists in that data.
 
 ## Cache
 
@@ -87,7 +129,13 @@ enrichers/abuseipdb.py  AbuseIPDB v2: lookup_ip
 enrichers/common.py     Shared HTTP call + error handling (every enricher uses it)
 enrichers/indicators.py IP/domain validation and skip rules
 cache.py                SQLite cache with a TTL
-triage.py               triage(alert) -> TriageResult; per-source rules + combining
+behavior.py             analyze(alert): deobfuscation, PowerShell decoding, severity → verdict
+rules.py                Rule models, YAML loader/validator, and matching
+rules/behavior_rules.yaml  The detection rules
+attack.py               ATT&CK technique/tactic lookup (offline)
+data/attack_techniques.json  Generated from MITRE STIX (committed)
+scripts/update_attack.py     Regenerates the ATT&CK data
+triage.py               triage(alert) -> TriageResult; combines intel + behavior
 cli.py                  Command-line entry point (the only module that prints)
 alerts/                 Sample alerts (fictional hosts and users)
 tests/                  pytest + respx tests (all HTTP is mocked)

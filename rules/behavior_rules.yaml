@@ -1,0 +1,226 @@
+# Behavior detection rules, loaded and validated by rules.py at startup.
+#
+# Each rule:
+#   id           unique snake_case id
+#   name         short human-readable name
+#   description  what the rule catches and why it matters
+#   techniques   MITRE ATT&CK technique IDs (checked against data/attack_techniques.json)
+#   severity     low | medium | high   (high → malicious, medium → suspicious, low → context only)
+#   match        a group: all_of (every item must match) or any_of (at least one)
+#                Items are conditions {field, regex} or nested groups.
+#
+# Fields:  command_line, file_path, parent_process, image (the process file name)
+# Regexes are case-insensitive. YAML single quotes keep backslashes literal;
+# write '' for a literal single quote.
+#
+# Text is deobfuscated before matching: carets (^) and empty quote pairs ("")
+# are removed and repeated whitespace is collapsed, so "p^ow^er""shell" is
+# matched as "powershell".
+#
+# Common pieces repeated below:
+#   user-writable path:  \\(temp|tmp|appdata|downloads|programdata)\\|%(temp|tmp|appdata|localappdata|programdata)%
+
+rules:
+  - id: encoded_powershell
+    name: Encoded PowerShell command
+    description: >
+      PowerShell run with -EncodedCommand or one of its abbreviations (-e, -ec,
+      -en, -enc, ...). Encoding hides the real script from command-line logging
+      and is a common way to launch malicious PowerShell.
+    techniques: [T1059.001]
+    severity: medium
+    match:
+      all_of:
+        - any_of:
+            - field: image
+              regex: '^(powershell|pwsh)(\.exe)?$'
+            - field: command_line
+              regex: '\b(powershell|pwsh)(\.exe)?\b'
+        # PowerShell accepts -, / and Unicode dashes (en dash, em dash, horizontal bar)
+        # before a parameter, and any unambiguous prefix of -EncodedCommand.
+        - field: command_line
+          regex: '(?<!\S)[-/–—―](e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\s+["'']?[a-z0-9+/=]{16,}'
+
+  - id: powershell_download_cradle
+    name: PowerShell download cradle
+    description: >
+      PowerShell code that downloads content from the network and/or executes a
+      string as code (IEX). Download-and-execute is the classic way to pull a
+      second-stage payload into memory.
+    techniques: [T1059.001, T1105]
+    severity: high
+    match:
+      any_of:
+        - field: command_line
+          regex: '\b(iex|invoke-expression|downloadstring|downloadfile|invoke-webrequest|iwr)\b'
+        - field: command_line
+          regex: '\bnet\.webclient\b'
+
+  - id: certutil_download
+    name: Certutil download or decode
+    description: >
+      certutil.exe used to download a file (-urlcache) or decode a base64
+      payload (-decode). Both are well-known living-off-the-land abuses of a
+      certificate tool.
+    techniques: [T1105, T1140]
+    severity: high
+    match:
+      all_of:
+        - field: command_line
+          regex: '\bcertutil(\.exe)?\b'
+        - field: command_line
+          regex: '[-/](urlcache|decode|decodehex)\b'
+
+  - id: mshta_execution
+    name: Mshta executing a URL or script
+    description: >
+      mshta.exe running a remote URL, inline VBScript/JavaScript, or a script
+      file. Mshta runs HTML applications outside the browser sandbox.
+    techniques: [T1218.005]
+    severity: high
+    match:
+      any_of:
+        - field: command_line
+          regex: '\bmshta(\.exe)?["'']?\s+["'']?(https?://|vbscript:|javascript:|\S+\.(hta|sct|js|vbs)\b)'
+
+  - id: regsvr32_squiblydoo
+    name: Regsvr32 remote scriptlet (Squiblydoo)
+    description: >
+      regsvr32.exe with /i: pointing at a URL or loading scrobj.dll, which runs
+      a remote or local COM scriptlet while bypassing application allowlisting.
+    techniques: [T1218.010]
+    severity: high
+    match:
+      all_of:
+        - field: command_line
+          regex: '\bregsvr32(\.exe)?\b'
+        - field: command_line
+          regex: '[-/]i:'
+        - any_of:
+            - field: command_line
+              regex: 'https?://'
+            - field: command_line
+              regex: '\bscrobj(\.dll)?\b'
+
+  - id: rundll32_user_path
+    name: Rundll32 with a user-writable path
+    description: >
+      rundll32.exe running from, or referencing a file in, a user-writable
+      folder (Temp, AppData, Downloads, ProgramData). Legitimate rundll32 use
+      almost always loads DLLs from System32 or Program Files.
+    techniques: [T1218.011]
+    severity: medium
+    match:
+      all_of:
+        - any_of:
+            - field: image
+              regex: '^rundll32(\.exe)?$'
+            - field: command_line
+              regex: '\brundll32(\.exe)?\b'
+        - any_of:
+            - field: command_line
+              regex: '\\(temp|tmp|appdata|downloads|programdata)\\|%(temp|tmp|appdata|localappdata|programdata)%'
+            - field: file_path
+              regex: '\\(temp|tmp|appdata|downloads|programdata)\\'
+
+  - id: office_spawns_shell
+    name: Office application spawned a shell or script host
+    description: >
+      Word, Excel, PowerPoint, or Outlook launching cmd, PowerShell, a script
+      host, mshta, or rundll32. This is the typical result of a malicious macro
+      or attachment being opened.
+    techniques: [T1566.001, T1204.002]
+    severity: high
+    match:
+      all_of:
+        - field: parent_process
+          regex: '(^|\\)(winword|excel|powerpnt|outlook)\.exe$'
+        - any_of:
+            - field: image
+              regex: '^(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32)\.exe$'
+            # The program at the start of the command line, with or without a path.
+            - field: command_line
+              regex: '^"?([a-z]:\\([^"\\]+\\)*)?(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32)(\.exe)?"?(\s|$)'
+
+  - id: schtasks_create
+    name: Scheduled task created
+    description: >
+      schtasks.exe /create registers a scheduled task. Attackers use it for
+      persistence and to run payloads as SYSTEM. Admins use it too, so it is
+      medium on its own.
+    techniques: [T1053.005]
+    severity: medium
+    match:
+      all_of:
+        - field: command_line
+          regex: '\bschtasks(\.exe)?\b.*[-/]create\b'
+
+  - id: registry_run_key
+    name: Registry Run key modified
+    description: >
+      reg add writing to a Run or RunOnce key, which starts a program every
+      time a user logs on.
+    techniques: [T1547.001]
+    severity: medium
+    match:
+      all_of:
+        - field: command_line
+          regex: '\breg(\.exe)?\s+add\b.*\\currentversion\\run(once)?\b'
+
+  - id: shadow_copy_deletion
+    name: Volume shadow copies deleted
+    description: >
+      Deleting shadow copies with vssadmin or wmic stops the system from being
+      restored. Ransomware almost always does this right before encrypting.
+    techniques: [T1490]
+    severity: high
+    match:
+      any_of:
+        - field: command_line
+          regex: '\bvssadmin(\.exe)?\b.*\bdelete\s+shadows\b'
+        - field: command_line
+          regex: '\bwmic(\.exe)?\b.*\bshadowcopy\b.*\bdelete\b'
+
+  - id: lsass_dump
+    name: LSASS memory dump
+    description: >
+      Dumping lsass.exe memory with procdump or comsvcs.dll MiniDump to steal
+      credentials offline.
+    techniques: [T1003.001]
+    severity: high
+    match:
+      any_of:
+        - field: command_line
+          regex: '\bprocdump(64)?(\.exe)?\b.*\blsass\b'
+        - field: command_line
+          regex: '\bcomsvcs(\.dll)?\b.*(minidump|#\s*24\b)'
+
+  - id: discovery_commands
+    name: Discovery commands
+    description: >
+      whoami, net user/group, nltest, or systeminfo. Common hands-on-keyboard
+      reconnaissance, but also everyday admin work, so it is context only.
+    techniques: [T1033, T1087, T1082]
+    severity: low
+    match:
+      any_of:
+        - field: command_line
+          regex: '\b(whoami|nltest|systeminfo)(\.exe)?\b'
+        - field: command_line
+          regex: '\bnet1?(\.exe)?\s+(user|group)\b'
+
+  - id: user_writable_execution
+    name: Execution from a user-writable folder
+    description: >
+      A program running from Temp, Downloads, or AppData. Malware often lands
+      and runs there, but so do installers and some per-user apps, so it is
+      context only.
+    techniques: [T1204.002]
+    severity: low
+    match:
+      any_of:
+        - field: file_path
+          regex: '\\(temp|tmp|downloads|appdata)\\'
+        # The program at the start of the command line lives in one of those folders.
+        - field: command_line
+          regex: '^("[^"]*|[^"\s]*)(\\(temp|tmp|downloads|appdata)\\|%(temp|tmp|appdata|localappdata)%)'

