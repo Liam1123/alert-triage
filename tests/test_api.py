@@ -14,6 +14,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+from adapters import ocsf
 from api import main
 from api.demo import DEMO_SKIP_REASON
 from api.ratelimit import RateLimiter
@@ -61,7 +62,11 @@ def test_triage_each_sample(filename):
     body = response.json()
     assert body["verdict"] in {"malicious", "suspicious", "clean", "unknown"}
     assert body["reasons"]
-    assert body["alert"] == {**dict.fromkeys(body["alert"]), **load(filename)}
+    sample = load(filename)
+    if ocsf.is_ocsf(sample):
+        assert body["alert"]["hostname"] == ocsf.to_alert(sample).hostname
+    else:
+        assert body["alert"] == {**dict.fromkeys(body["alert"]), **sample}
 
 
 @pytest.mark.parametrize("filename, expected", [
@@ -160,18 +165,18 @@ def test_live_allowed_with_allow_live(monkeypatch):
 # --- Input validation ---------------------------------------------------------
 
 def test_oversized_body_rejected():
-    alert = {"hostname": "WS-01", "command_line": "A" * (33 * 1024)}
+    alert = {"hostname": "WS-01", "command_line": "A" * (65 * 1024)}
 
     response = post_triage(alert)
 
     assert response.status_code == 413
-    assert "32 KB" in response.json()["detail"]
+    assert "64 KB" in response.json()["detail"]
 
 
 def test_oversized_body_without_content_length_rejected():
     def chunks():
         yield b'{"hostname": "WS-01", "command_line": "'
-        for _ in range(40):
+        for _ in range(70):
             yield b"A" * 1024
         yield b'"}'
 
@@ -309,7 +314,7 @@ def test_keys_never_appear_in_responses(monkeypatch):
     ("get", "/no-such-page", {}),
     ("post", "/api/triage", {"json": {"hostname": "WS-01"}}),
     ("post", "/api/triage", {"json": {"bogus": 1}}),
-    ("post", "/api/triage", {"content": b"x" * 40_000, "headers": {"Content-Type": "application/json"}}),
+    ("post", "/api/triage", {"content": b"x" * 70_000, "headers": {"Content-Type": "application/json"}}),
 ])
 def test_security_headers_on_every_response(method, path, kwargs):
     response = getattr(client, method)(path, **kwargs)
@@ -376,3 +381,56 @@ def test_html_has_no_inline_scripts_or_third_party_assets():
     for line in html.splitlines():
         if "https://" in line:
             assert "github.com" in line  # The repo link is the only external URL.
+
+
+# --- OCSF input ---------------------------------------------------------------
+
+def test_ocsf_alert_is_converted_and_triaged():
+    body = post_triage(load("ocsf_clipboard_stager.json")).json()
+
+    assert body["verdict"] == "malicious"
+    assert body["alert"]["hostname"] == "WS-FIN-0112"
+    assert body["alert"]["source_detection"] == {
+        "title": "Unsigned PowerShell script written to Themes folder",
+        "severity": "High",
+        "analytic": "Behavioral Engine: Obfuscated Script Loader",
+    }
+    assert "[Windows.Forms.Clipboard]::GetText()" in body["shift_decoded_command"]
+    assert any(f["decoder"] == "char_shift" for f in body["behavior_findings"])
+
+
+def test_ocsf_strict_caps_apply_after_conversion():
+    data = load("ocsf_clipboard_stager.json")
+    data["evidences"][0]["process"]["parent_process"]["cmd_line"] = "A" * 20_000
+
+    response = post_triage(data)
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["field"] == "command_line"
+
+
+def test_realistic_large_ocsf_alert_fits_the_body_limit():
+    data = load("ocsf_clipboard_stager.json")
+    # Exports carry lots of vendor detail the adapter ignores.
+    data["unmapped"]["observables"] = [{"name": f"field_{i}", "value": "x" * 300} for i in range(100)]
+    assert 32 * 1024 < len(json.dumps(data)) < main.MAX_BODY_BYTES
+
+    assert post_triage(data).status_code == 200
+
+
+def test_unknown_source_detection_field_rejected():
+    response = post_triage({"hostname": "WS-01", "source_detection": {"title": "x", "score": 9}})
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["field"] == "source_detection.score"
+
+
+def test_deeply_nested_json_is_rejected_cleanly():
+    # Just under the size limit. Depending on the Python build, json.loads either
+    # parses this (then it's not an alert: 422) or hits its recursion limit (400).
+    body = b"[" * 32_000 + b"]" * 32_000
+
+    response = client.post("/api/triage", content=body, headers={"Content-Type": "application/json"})
+
+    assert response.status_code in (400, 422)
+    assert response.json()["detail"] in ("Request body is not valid JSON", "Invalid alert")

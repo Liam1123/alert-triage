@@ -12,11 +12,25 @@ from pydantic import BaseModel, Field
 Verdict = Literal["malicious", "suspicious", "clean", "unknown"]
 IndicatorType = Literal["sha256", "ip", "domain"]
 Severity = Literal["low", "medium", "high"]
+# Which decoder produced the text a behavior finding matched, if any.
+Decoder = Literal["encoded_command", "char_shift"]
 
 # Higher number = worse. The overall verdict is the worst individual verdict.
 # "unknown" outranks "clean": if we couldn't check something, we can't call
 # the whole alert clean.
 VERDICT_RANK: dict[Verdict, int] = {"clean": 0, "unknown": 1, "suspicious": 2, "malicious": 3}
+
+
+class SourceDetection(BaseModel):
+    """What the EDR itself said about the alert, kept for context.
+
+    Filled in by an adapter (e.g. adapters/ocsf.py) from the vendor's own
+    title, severity, and analytic. It never affects our verdict.
+    """
+
+    title: str | None = None
+    severity: str | None = None
+    analytic: str | None = None
 
 
 class Alert(BaseModel):
@@ -30,6 +44,7 @@ class Alert(BaseModel):
     parent_process: str | None = None
     remote_ip: str | None = None
     domain: str | None = None
+    source_detection: SourceDetection | None = None
 
 
 class EnrichmentResult(BaseModel):
@@ -88,7 +103,8 @@ class BehaviorFinding(BaseModel):
     evidence: str  # The text that matched, with a little context.
     # (start, end) character offsets in `evidence` of the text the rules matched.
     highlights: list[tuple[int, int]] = []
-    from_decoded: bool = False  # True if it matched decoded PowerShell, not the raw alert.
+    from_decoded: bool = False  # True if it matched decoded text, not the raw alert.
+    decoder: Decoder | None = None  # Which decoder produced that text.
 
 
 class TriageResult(BaseModel):
@@ -99,5 +115,6 @@ class TriageResult(BaseModel):
     verdict: Verdict
     reasons: list[str]
     behavior_findings: list[BehaviorFinding] = []
-    decoded_command: str | None = None
+    decoded_command: str | None = None  # From PowerShell -EncodedCommand (base64).
+    shift_decoded_command: str | None = None  # From a per-character shift ([char]($c - 3)).
     tactics: list[str] = []  # ATT&CK tactics touched, in kill-chain order.

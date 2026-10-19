@@ -2,20 +2,29 @@
 
 It is the same Alert the CLI uses, made strict for untrusted input: unknown
 fields are rejected and every string has a length cap. The caps are generous
-for real EDR data and well under the 32 KB body limit in main.py.
+for real EDR data. OCSF alerts are converted to these fields first
+(adapters/), so the same checks apply to them after conversion.
 """
 
 from typing import Annotated
 
 from pydantic import ConfigDict, StringConstraints
 
-from models import Alert
+from models import Alert, SourceDetection
 
 Short = Annotated[str, StringConstraints(max_length=256)]
 Path = Annotated[str, StringConstraints(max_length=1_024)]
-# Windows caps a command line at 32,767 characters, but the body limit is 32 KB
-# in total, so this is the realistic maximum for one field.
+# Windows caps a command line at 32,767 characters; half that is plenty for
+# real alerts and keeps one field well inside the body limit in main.py.
 CommandLine = Annotated[str, StringConstraints(max_length=16_384)]
+
+
+class SourceDetectionRequest(SourceDetection):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Short | None = None
+    severity: Annotated[str, StringConstraints(max_length=64)] | None = None
+    analytic: Short | None = None
 
 
 class AlertRequest(Alert):
@@ -29,6 +38,7 @@ class AlertRequest(Alert):
     parent_process: Path | None = None
     remote_ip: Annotated[str, StringConstraints(max_length=64)] | None = None
     domain: Short | None = None
+    source_detection: SourceDetectionRequest | None = None
 
     def to_alert(self) -> Alert:
         """The plain Alert the core expects (so the response has no request-only config)."""

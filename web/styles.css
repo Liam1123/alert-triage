@@ -288,6 +288,7 @@ button.secondary:hover { background: var(--surface-2); }
 }
 .verdict-subject { font-size: var(--size-heading); overflow-wrap: anywhere; }
 .verdict-basis { margin-top: 4px; }
+.verdict-edr { margin-top: 12px; max-width: 72ch; overflow-wrap: anywhere; }
 
 .verdict--malicious { background: var(--danger); color: var(--danger-ink); border-bottom-color: var(--danger); }
 .verdict--suspicious { background: var(--danger-tint); color: var(--danger-tint-ink); border-bottom-color: var(--danger-tint); }

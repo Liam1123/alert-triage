@@ -56,6 +56,44 @@ rules:
         - field: command_line
           regex: '\bnet\.webclient\b'
 
+  - id: clipboard_execution
+    name: PowerShell executes clipboard contents
+    description: >
+      PowerShell reading the clipboard ([Windows.Forms.Clipboard]::GetText() or
+      Get-Clipboard) and running it as code with iex/Invoke-Expression or by
+      assigning it to a function ($function:). Whatever the user was tricked into
+      copying becomes the payload, as in "paste this to fix it" lures. Reading
+      the clipboard on its own is normal admin work; running it is not.
+    techniques: [T1059.001, T1204.004]
+    severity: high
+    match:
+      all_of:
+        - field: command_line
+          regex: '\[(system\.)?windows\.forms\.clipboard\]::gettext\b|\bget-clipboard\b'
+        - field: command_line
+          regex: '\b(iex|invoke-expression)\b|\$function:'
+
+  - id: char_shift_decoding
+    name: Character-shift string decoding
+    description: >
+      A loop that rebuilds a string by shifting every character by a constant
+      ([char]([int]$c - 3)) and then runs the result via $function:, iex, or the
+      & call operator. It hides the real command from logs and string matching.
+      The shifted text is decoded (never run) and checked against these rules too.
+    techniques: [T1027]
+    severity: medium
+    match:
+      all_of:
+        # The shift. Mirrors CHAR_SHIFT_PATTERN in behavior.py.
+        - field: command_line
+          regex: '\[char\]\s*\(\s*[^()]{0,80}\$[^()]{0,80}[-+]\s*\d{1,3}\s*\)'
+        # A loop around it.
+        - field: command_line
+          regex: '\b(foreach|for|while)\s*\(|\bforeach-object\b|%\s*\{'
+        # Running what it built.
+        - field: command_line
+          regex: '\$function:|\b(iex|invoke-expression)\b|(^|[;{(|]\s*)&\s*[$(\[{]'
+
   - id: certutil_download
     name: Certutil download or decode
     description: >

@@ -98,6 +98,7 @@ def triage(alert: Alert, cache: Cache | None = None) -> TriageResult:
         reasons=reasons,
         behavior_findings=findings,
         decoded_command=behavior.decode_encoded_command(alert.command_line),
+        shift_decoded_command=behavior.decode_char_shift(alert.command_line),
         tactics=tactics,
     )
 
@@ -122,6 +123,13 @@ def overall_verdict(
     return max(verdicts, key=lambda verdict: VERDICT_RANK[verdict])
 
 
+# How a reason names text that came out of a decoder instead of the raw alert.
+DECODER_WHERE = {
+    "encoded_command": "decoded PowerShell command",
+    "char_shift": "char-shift-decoded command",
+}
+
+
 def behavior_reasons(findings: list[BehaviorFinding]) -> list[str]:
     """One reason per behavior finding, plus a note if escalation kicked in."""
     if not findings:
@@ -130,7 +138,7 @@ def behavior_reasons(findings: list[BehaviorFinding]) -> list[str]:
     reasons = []
     for f in findings:
         technique_ids = ", ".join(t.id for t in f.techniques)
-        where = "decoded PowerShell command" if f.from_decoded else f.matched_field
+        where = DECODER_WHERE.get(f.decoder, f.matched_field)
         effect = ", context only" if behavior.SEVERITY_VERDICT[f.severity] is None else ""
         reasons.append(
             f"behavior: {f.rule_name} [{technique_ids}] ({f.severity}{effect}) "

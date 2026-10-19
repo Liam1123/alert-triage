@@ -29,6 +29,8 @@ const SEVERITY_EFFECT = {
   low: "Low severity, context only.",
 };
 const SEVERITY_VERDICT_WORD = { high: "malicious", medium: "suspicious" };
+// Mirrors DECODER_WHERE in triage.py.
+const DECODER_WHERE = { encoded_command: "decoded PowerShell command", char_shift: "char-shift-decoded command" };
 const ORIGIN_WORDS = { cached: "Cached", live: "Live", skipped: "Skipped", demo: "Demo", error: "Not checked" };
 // Reasons are listed worst first, so the ones that decided the verdict lead.
 const TAG_RANK = { malicious: 5, suspicious: 4, unknown: 3, context: 2, clean: 2, demo: 1, skipped: 0 };
@@ -223,7 +225,7 @@ function handleError(response, body) {
       body.errors.map((e) => `${e.field}: ${e.message}`));
     restoreCard();
   } else if (status === 413) {
-    showEditorError("This alert is larger than the server accepts (32 KB). Trim the long fields and try again.");
+    showEditorError("This alert is larger than the server accepts (64 KB). Trim the long fields and try again.");
     restoreCard();
   } else if (status === 400) {
     showEditorError("The server couldn't read this as JSON.");
@@ -319,7 +321,10 @@ function renderResult(result, live) {
     verdictBand(result),
     reasonsSection(result),
     findingsSection(result.behavior_findings),
-    decodedSection(result.decoded_command),
+    decodedSection("Decoded PowerShell command", result.decoded_command,
+      "Decoded from the -EncodedCommand argument. Never executed."),
+    decodedSection("Decoded character-shifted command", result.shift_decoded_command,
+      "Rebuilt by undoing the per-character shift in the command line. Never executed."),
     tacticsSection(result.tactics),
     intelSection(result.enrichments),
     alertSection(result.alert),
@@ -346,6 +351,19 @@ function verdictBand(result) {
     el("h2", { class: "verdict-word", text: capitalize(verdict), attrs: { id: "card-title" } }),
     el("p", { class: "verdict-subject", text: subject }),
     el("p", { class: "verdict-basis", text: basis }),
+    edrSaid(alert.source_detection),
+  );
+}
+
+// What the EDR itself called this alert (from an OCSF export), shown next to
+// our verdict for comparison. It never changes our verdict.
+function edrSaid(detection) {
+  if (!detection) return null;
+  const details = [detection.severity, detection.analytic].filter(Boolean).join(", ");
+  const title = detection.title || "(no title)";
+  return el("p", { class: "verdict-edr" },
+    el("strong", { text: "EDR said: " }),
+    details ? `${title} (${details})` : title,
   );
 }
 
@@ -446,11 +464,11 @@ function evidence(text, highlights) {
   return block;
 }
 
-function decodedSection(decoded) {
+function decodedSection(title, decoded, note) {
   if (!decoded) return null;
-  return section("Decoded PowerShell command",
+  return section(title,
     el("pre", { class: "code-block" }, el("code", { text: decoded })),
-    el("p", { class: "code-note", text: "Decoded from the -EncodedCommand argument. Never executed." }),
+    el("p", { class: "code-note", text: note }),
   );
 }
 
@@ -535,7 +553,7 @@ function originOf(e) {
 }
 
 function whereFound(f) {
-  if (f.from_decoded) return "decoded PowerShell command";
+  if (f.decoder) return DECODER_WHERE[f.decoder] || "decoded command";
   return f.matched_field.split(", ").map((name) => name.replace("_", " ")).join(" and ");
 }
 
@@ -568,7 +586,7 @@ function loadSample(name) {
 }
 
 function sampleLabel(name) {
-  const words = name.replace(/_/g, " ").replace(/powershell/i, "PowerShell").replace(/^xss/i, "XSS");
+  const words = name.replace(/_/g, " ").replace(/powershell/i, "PowerShell").replace(/^xss/i, "XSS").replace(/^ocsf/i, "OCSF");
   return capitalize(words);
 }
 
@@ -587,7 +605,7 @@ async function loadSamples() {
   }
 
   const tryButtons = $("try-buttons");
-  for (const name of ["encoded_powershell", "multi_indicator", "office_macro", "benign_admin"]) {
+  for (const name of ["encoded_powershell", "multi_indicator", "ocsf_clipboard_stager", "office_macro", "benign_admin"]) {
     if (!samples.has(name) || !tryButtons) continue;
     const button = el("button", { class: "secondary", text: sampleLabel(name), attrs: { type: "button" } });
     button.addEventListener("click", () => { loadSample(name); runTriage(); });

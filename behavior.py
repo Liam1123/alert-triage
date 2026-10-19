@@ -9,7 +9,7 @@ import re
 from pathlib import Path, PureWindowsPath
 
 import attack
-from models import Alert, BehaviorFinding, Severity, Verdict, VERDICT_RANK
+from models import Alert, BehaviorFinding, Decoder, Severity, Verdict, VERDICT_RANK
 from rules import Match, Rule, load_rules
 
 # How each rule severity affects the verdict. Low findings are listed for
@@ -50,20 +50,34 @@ ENCODED_ARGUMENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Character-shift obfuscation: each character of a string literal is moved by
+# a constant, and a loop undoes it with [char]([int]$c - 3) before running the
+# result. This finds that undo step. The operand must use a variable, so a
+# plain [char](65+3) doesn't count. It mirrors the char_shift_decoding rule.
+CHAR_SHIFT_PATTERN = re.compile(r"\[char\]\s*\(\s*([^()]{1,80}?)\s*([+-])\s*(\d{1,3})\s*\)", re.IGNORECASE)
+# Single-quoted PowerShell strings: no escapes or variables inside, so the text
+# between the quotes is exactly the shifted data.
+SINGLE_QUOTED_PATTERN = re.compile(r"'([^']{8,})'")
+MAX_SHIFT = 25  # Larger "shifts" are usually case conversion (32) or arithmetic, not obfuscation.
+MAX_SHIFT_SOURCE_CHARS = 8_192  # Literal characters we're willing to decode.
+
 
 def analyze(alert: Alert, rules: list[Rule] | None = None) -> list[BehaviorFinding]:
-    """Run every rule against the alert, then against any decoded PowerShell."""
+    """Run every rule against the alert, then against any decoded command."""
     if rules is None:
         rules = RULES
 
-    findings = _run_rules(rules, _fields_for(alert), from_decoded=False)
+    findings = _run_rules(rules, _fields_for(alert), decoder=None)
 
+    # Decoded text is a PowerShell script, so it's only a command line. Rules
+    # about parents or file paths can't match it, which is correct.
     decoded = decode_encoded_command(alert.command_line)
     if decoded:
-        # The decoded text is a PowerShell script, so it's only a command line.
-        # Rules about parents or file paths can't match it, which is correct.
-        decoded_fields = {"command_line": deobfuscate(decoded)}
-        findings += _run_rules(rules, decoded_fields, from_decoded=True)
+        findings += _run_rules(rules, {"command_line": deobfuscate(decoded)}, decoder="encoded_command")
+
+    shifted = decode_char_shift(alert.command_line)
+    if shifted:
+        findings += _run_rules(rules, {"command_line": deobfuscate(shifted)}, decoder="char_shift")
 
     return findings
 
@@ -140,6 +154,48 @@ def decode_encoded_command(command_line: str | None) -> str | None:
     return decoded
 
 
+def decode_char_shift(command_line: str | None) -> str | None:
+    """Undo a per-character shift like [char]([int]$c - 3), or return None.
+
+    Finds a [char](... - N) or [char](... + N) step with a constant N from 1
+    to MAX_SHIFT, applies that same step to the longest single-quoted string
+    literal in the command line, and keeps the result only if it reads as
+    text. Nothing is ever executed.
+
+    This reads the raw command line, not deobfuscate()'s output: shifted text
+    is full of characters like ^ (a shifted "[") that deobfuscation removes.
+    """
+    if not command_line:
+        return None
+
+    step = None
+    for found in CHAR_SHIFT_PATTERN.finditer(command_line):
+        operand, sign, amount = found.group(1), found.group(2), int(found.group(3))
+        if "$" in operand and 1 <= amount <= MAX_SHIFT:
+            step = -amount if sign == "-" else amount
+            break
+    if step is None:
+        return None
+
+    literals = SINGLE_QUOTED_PATTERN.findall(command_line)
+    if not literals:
+        return None
+    source = max(literals, key=len)
+    truncated = len(source) > MAX_SHIFT_SOURCE_CHARS
+    source = source[:MAX_SHIFT_SOURCE_CHARS]
+
+    codes = [ord(ch) + step for ch in source]
+    if any(code < 0 or code > 0x10FFFF for code in codes):
+        return None
+    decoded = "".join(chr(code) for code in codes)
+    if not _looks_like_text(decoded):
+        return None
+
+    if truncated or len(decoded) > MAX_DECODED_CHARS:
+        decoded = decoded[:MAX_DECODED_CHARS] + "\n[truncated]"
+    return decoded
+
+
 def _bytes_to_text(raw: bytes) -> str | None:
     """Decode as UTF-16LE, falling back to UTF-8. None if neither looks like text."""
     for encoding in ("utf-16-le", "utf-8"):
@@ -190,7 +246,7 @@ def _image_name(file_path: str | None, command_line: str | None) -> str | None:
     return None
 
 
-def _run_rules(rules: list[Rule], fields: dict[str, str], from_decoded: bool) -> list[BehaviorFinding]:
+def _run_rules(rules: list[Rule], fields: dict[str, str], decoder: Decoder | None) -> list[BehaviorFinding]:
     findings = []
     for rule in rules:
         matches = rule.match.evaluate(fields)
@@ -208,7 +264,8 @@ def _run_rules(rules: list[Rule], fields: dict[str, str], from_decoded: bool) ->
                 matched_field=", ".join(matched_fields),
                 evidence=evidence,
                 highlights=highlights,
-                from_decoded=from_decoded,
+                from_decoded=decoder is not None,
+                decoder=decoder,
             )
         )
     return findings

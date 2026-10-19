@@ -44,7 +44,26 @@ python cli.py alerts/shadow_delete.json       # vssadmin delete shadows → mali
 python cli.py alerts/office_macro.json        # WINWORD spawning PowerShell → malicious
 python cli.py alerts/benign_admin.json        # signed admin script from Program Files → clean
 python cli.py alerts/xss_probe.json           # HTML/JS payloads in every field, for testing the web app → malicious
+python cli.py alerts/ocsf_clipboard_stager.json  # OCSF export: char-shifted loader that runs the clipboard → malicious
 ```
+
+### OCSF alerts
+
+The CLI and the API also accept an OCSF Detection Finding, the shape some EDRs (SentinelOne among them) export. Any JSON with `finding_info` and `evidences` goes through [`adapters/ocsf.py`](adapters/ocsf.py) first:
+
+| OCSF | Alert field |
+|---|---|
+| `evidences[].process.file.path` (or `.name`) | `file_path` |
+| `evidences[].process.file.hashes[]` with `algorithm_id` 3 | `sha256` |
+| `evidences[].process.cmd_line`, else the parent's `cmd_line` | `command_line` |
+| `evidences[].process.parent_process.file.path` | `parent_process` |
+| `evidences[].process.user` (or `actor.user`) | `user`, as `DOMAIN\name` |
+| `device.hostname`, `device.name`, or `resources[].name` | `hostname` (`(unknown host)` if none) |
+| `finding_info.title`, `severity`/`severity_id`, `finding_info.analytic.name` | `source_detection` |
+
+`\Device\HarddiskVolumeN\` paths become `C:\`. Missing, empty, or wrongly typed fields become None, and the adapter never raises. The command line falls back to the parent's because a detection on a written file (a dropped `.ps1`) has no command line of its own. The interesting one is the process that wrote or ran it.
+
+`source_detection` is what the EDR itself said. It's shown as "EDR said: ..." next to our verdict, and it never changes our verdict. `alerts/ocsf_clipboard_stager.json` is entirely fictional: the host, user, IDs, vendor and hash are all made up.
 
 `multi_indicator.json` makes one VirusTotal call for the EICAR hash. Its IP and domain are reserved documentation values, so they are skipped and never sent to an API. Expected verdict: malicious.
 
@@ -91,6 +110,8 @@ Rules live in [`rules/behavior_rules.yaml`](rules/behavior_rules.yaml) and are v
 Conditions can check `command_line`, `file_path`, `parent_process`, and `image` (the process file name, taken from `file_path` or the start of the command line). Regexes are case-insensitive. Before matching, text is deobfuscated: carets (`^`) and empty quote pairs (`""`) are removed and whitespace is collapsed.
 
 **Encoded PowerShell:** when a PowerShell command line uses `-EncodedCommand` (or `-e`, `-enc`, ...), the base64 is decoded as UTF-16LE (falling back to UTF-8) and the rules run again on the decoded script. The decoded text appears in the output. It is size-capped and never executed.
+
+**Character-shift decoding:** when a command line has a `[char]([int]$c - N)` (or `+ N`) step with a constant shift from 1 to 25, that same shift is applied to the longest single-quoted string literal in the command line. If the result reads as text, the rules run again on it, and findings say "in char-shift-decoded command". Decoding uses the raw command line, because shifted text often contains carets that deobfuscation would strip. It is size-capped and never executed. Double-quoted literals are not decoded, because they can contain escapes and variables.
 
 **ATT&CK data:** technique names and tactics come from [`data/attack_techniques.json`](data/attack_techniques.json), generated from MITRE's official STIX data. To refresh it after a new ATT&CK release:
 
@@ -158,7 +179,7 @@ Demo mode is a `Cache` subclass (`api/demo.py`) whose cache misses never call th
 ### Security choices
 
 - **Keys stay server-side.** `.env` is loaded once at startup. Keys are only ever sent in request headers to VirusTotal and AbuseIPDB. No response, log line or error message includes one. `/api/health` reports booleans only.
-- **Strict input.** Bodies over 32 KB get a 413 (checked against Content-Length *and* while reading, for chunked uploads). The alert is validated by a strict subclass of `Alert`: unknown fields are rejected, every string is length-capped, and validation errors name the field without echoing the value. Only `application/json` is accepted, which also blocks cross-site form posts.
+- **Strict input.** Bodies over 64 KB get a 413. That's enough for a realistic OCSF export (typically a few KB to a few tens of KB). The strict field caps still apply after conversion. The size is checked against Content-Length *and* while reading, for chunked uploads. The alert is validated by a strict subclass of `Alert`: unknown fields are rejected, every string is length-capped, and validation errors name the field without echoing the value. Only `application/json` is accepted, which also blocks cross-site form posts.
 - **Rate limits per client IP.** 10 triages a minute, and 2 a minute with live lookups (live also counts toward the 10), with a `Retry-After` header. The limiter is in memory (`api/ratelimit.py`). With several workers or containers each one counts separately (so a client gets N× the limit), a restart resets it, and behind a reverse proxy every user shares the proxy's IP. Before scaling out, move it to Redis or the proxy.
 - **Local and same-origin by default.** uvicorn binds to 127.0.0.1 unless you pass `--host`. There is no CORS middleware, so browsers refuse cross-origin reads.
 - **Security headers on every response, errors included:** a Content-Security-Policy allowing only this origin's own scripts, styles, fonts and images (no inline script, no third-party origins, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. The font (IBM Plex, OFL) is self-hosted in `web/fonts/`.
@@ -182,6 +203,7 @@ data/attack_techniques.json  Generated from MITRE STIX (committed)
 scripts/update_attack.py     Regenerates the ATT&CK data
 triage.py               triage(alert) -> TriageResult; combines intel + behavior
 cli.py                  Command-line entry point (the only module that prints)
+adapters/ocsf.py        OCSF Detection Finding → Alert (auto-detected by the CLI and API)
 api/main.py             FastAPI app: routes, body limit, rate limits, security headers
 api/demo.py             DemoCache: triage without network calls
 api/ratelimit.py        In-memory sliding-window rate limiter

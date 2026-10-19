@@ -70,13 +70,14 @@
           <h3 class="section-title">What the card shows, most important first</h3>
           <dl class="anatomy-list">
             <dt>Overall verdict</dt>
-            <dd>Malicious, suspicious, unknown or clean: the worst verdict from behavior and intel.</dd>
+            <dd>Malicious, suspicious, unknown or clean: the worst verdict from behavior and intel.
+              For an OCSF alert, what the EDR said is shown next to it.</dd>
             <dt>Why</dt>
             <dd>One sentence per finding and lookup, with the ones that decided the verdict first.</dd>
             <dt>Behavior findings</dt>
             <dd>Each rule that matched, its severity, its ATT&amp;CK techniques, and the matched text highlighted.</dd>
-            <dt>Decoded PowerShell</dt>
-            <dd>The script hidden in an -EncodedCommand argument, decoded but never run.</dd>
+            <dt>Decoded commands</dt>
+            <dd>The script hidden in an -EncodedCommand argument or a character-shifted string, decoded but never run.</dd>
             <dt>ATT&amp;CK tactics</dt>
             <dd>The stages of an attack this alert touches, in kill-chain order.</dd>
             <dt>Threat intel</dt>
@@ -88,7 +89,9 @@
           <p>Only <code>hostname</code> is required. The others are optional:
             <code>user</code>, <code>sha256</code>, <code>file_path</code>, <code>command_line</code>,
             <code>parent_process</code>, <code>remote_ip</code> and <code>domain</code>.
-            Any other field is rejected.</p>
+            Any other field is rejected.
+            An OCSF finding (with <code>finding_info</code> and <code>evidences</code>, as some EDRs export)
+            is accepted too and converted to these fields.</p>
         </div>
       </div>
     </section>

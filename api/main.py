@@ -3,7 +3,7 @@
 Run it with:  uvicorn api.main:app --reload   (binds to 127.0.0.1 by default)
 
 Routes:
-  POST /api/triage[?live=true]  body: an Alert as JSON  →  a TriageResult
+  POST /api/triage[?live=true]  body: an Alert, or an OCSF finding, as JSON  →  a TriageResult
   GET  /api/samples             the sample alerts in alerts/
   GET  /api/health              ok, which API keys are set (booleans), live allowed?
   /                             the web app in web/, as static files
@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+import adapters
 from api.demo import DemoCache
 from api.ratelimit import RateLimiter
 from api.schemas import AlertRequest
@@ -40,7 +41,11 @@ ROOT = Path(__file__).parent.parent
 ALERTS_DIR = ROOT / "alerts"
 WEB_DIR = ROOT / "web"
 
-MAX_BODY_BYTES = 32 * 1024
+# OCSF findings carry much more than our Alert needs (metadata, device and
+# agent details, several hashes, vendor "unmapped" fields): typically a few KB
+# to a few tens of KB. 64 KB fits those with room to spare; the strict field
+# caps in api/schemas.py still apply after conversion.
+MAX_BODY_BYTES = 64 * 1024
 API_KEY_NAMES = ["VT_API_KEY", "ABUSEIPDB_API_KEY"]
 
 # Every triage counts against the first limiter. A live triage also counts
@@ -138,10 +143,13 @@ async def triage_alert(request: Request, live: bool = False):
         return error(f"Request body is larger than {MAX_BODY_BYTES // 1024} KB", 413)
 
     try:
-        alert = AlertRequest.model_validate_json(body).to_alert()
+        data = json.loads(body)
+    except (ValueError, RecursionError):  # Some Python builds raise RecursionError on [[[[... nesting.
+        return error("Request body is not valid JSON", 400)
+
+    try:
+        alert = AlertRequest.model_validate(adapters.alert_fields(data)).to_alert()
     except ValidationError as exc:
-        if any(e["type"] == "json_invalid" for e in exc.errors()):
-            return error("Request body is not valid JSON", 400)
         return error("Invalid alert", 422, extra={"errors": field_errors(exc)})
 
     cache = None if live else DemoCache()  # None → triage() uses the real Cache and live lookups.
