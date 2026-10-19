@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alert Triage</title>
+  <meta name="description" content="Paste an EDR alert and get a triage verdict with ATT&amp;CK findings and threat intel.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="wordmark">Alert Triage</h1>
+    <div class="mode" id="mode">
+      <span class="mode-name" id="mode-name">Demo mode</span>
+      <span class="mode-note" id="mode-note">Intel comes from the local cache only. No API calls.</span>
+      <label class="live-toggle" id="live-toggle">
+        <input type="checkbox" id="live" disabled>
+        <span>Live lookups</span>
+        <span class="live-off" id="live-off">(off on this server)</span>
+      </label>
+    </div>
+    <a class="repo-link" href="https://github.com/Liam1123/alert-triage" rel="noopener noreferrer">Source on GitHub</a>
+  </header>
+
+  <main class="workspace">
+    <section class="editor-pane" aria-labelledby="editor-title">
+      <div class="pane-head">
+        <h2 id="editor-title" class="pane-title">Alert JSON</h2>
+        <label class="sample-picker">
+          <span class="visually-hidden">Load a sample alert</span>
+          <select id="samples">
+            <option value="">Load sample…</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="editor" id="editor">
+        <div class="gutter" id="gutter" aria-hidden="true"></div>
+        <textarea id="alert-input" spellcheck="false" autocomplete="off" autocapitalize="off"
+                  wrap="off" aria-describedby="editor-status shortcut-hint"
+                  aria-label="Alert JSON"
+                  placeholder='{
+  "hostname": "WS-FIN-0371",
+  "command_line": "powershell.exe -enc ...",
+  "remote_ip": "203.0.113.80"
+}'></textarea>
+      </div>
+
+      <div class="editor-foot">
+        <button type="button" class="primary" id="triage-button">Triage alert</button>
+        <span class="hint" id="shortcut-hint"><kbd id="mod-key">Ctrl</kbd> + <kbd>Enter</kbd></span>
+      </div>
+      <div class="editor-status" id="editor-status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card-pane" id="card-pane" aria-labelledby="card-title" aria-live="polite">
+      <!-- Filled by app.js. This is the empty state, shown until the first triage. -->
+      <div class="state" id="empty-state">
+        <h2 id="card-title" class="state-title">Nothing triaged yet</h2>
+        <p>Paste an EDR alert as JSON on the left, or load a sample, then press Triage.
+          The verdict appears here with the reasons behind it, every behavior rule that matched,
+          the ATT&amp;CK tactics involved, and what threat intel says about each indicator.</p>
+        <div class="try">
+          <h3 class="section-title">Try a sample</h3>
+          <div class="try-buttons" id="try-buttons"></div>
+        </div>
+        <div class="anatomy">
+          <h3 class="section-title">What the card shows, most important first</h3>
+          <dl class="anatomy-list">
+            <dt>Overall verdict</dt>
+            <dd>Malicious, suspicious, unknown or clean: the worst verdict from behavior and intel.</dd>
+            <dt>Why</dt>
+            <dd>One sentence per finding and lookup, with the ones that decided the verdict first.</dd>
+            <dt>Behavior findings</dt>
+            <dd>Each rule that matched, its severity, its ATT&amp;CK techniques, and the matched text highlighted.</dd>
+            <dt>Decoded PowerShell</dt>
+            <dd>The script hidden in an -EncodedCommand argument, decoded but never run.</dd>
+            <dt>ATT&amp;CK tactics</dt>
+            <dd>The stages of an attack this alert touches, in kill-chain order.</dd>
+            <dt>Threat intel</dt>
+            <dd>VirusTotal and AbuseIPDB results per indicator, and whether each came from the cache, a live call, or was skipped.</dd>
+          </dl>
+        </div>
+        <div class="fields-help">
+          <h3 class="section-title">What an alert can contain</h3>
+          <p>Only <code>hostname</code> is required. The others are optional:
+            <code>user</code>, <code>sha256</code>, <code>file_path</code>, <code>command_line</code>,
+            <code>parent_process</code>, <code>remote_ip</code> and <code>domain</code>.
+            Any other field is rejected.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -4,6 +4,17 @@ An alert enrichment and triage assistant for SOC analysts. It takes an EDR-style
 
 **Sources:** VirusTotal (file hashes, IPs, domains) and AbuseIPDB (IPs). Results are cached locally in SQLite for 24 hours.
 
+## Screenshots
+
+![Triage card for multi_indicator.json: malicious verdict from a cached VirusTotal hit plus an Outlook-spawns-cmd behavior rule](docs/screenshots/1440-multi_indicator.png)
+*`multi_indicator.json`: a cached VirusTotal hit and an Outlook → cmd.exe behavior finding, both malicious.*
+
+![Triage card for encoded_powershell.json with the decoded PowerShell download cradle](docs/screenshots/1440-encoded_powershell.png)
+*`encoded_powershell.json`: the `-enc` argument decoded into a download cradle, with the matched text highlighted.*
+
+![The same encoded PowerShell triage at phone width, with the editor stacked above the card](docs/screenshots/390-encoded_powershell-first-screen.png)
+*The same alert at 390px wide: the editor stacks above the triage card.*
+
 ## Setup
 
 Requires Python 3.11+.
@@ -32,6 +43,7 @@ python cli.py alerts/certutil_download.json   # certutil -urlcache → malicious
 python cli.py alerts/shadow_delete.json       # vssadmin delete shadows → malicious
 python cli.py alerts/office_macro.json        # WINWORD spawning PowerShell → malicious
 python cli.py alerts/benign_admin.json        # signed admin script from Program Files → clean
+python cli.py alerts/xss_probe.json           # HTML/JS payloads in every field, for testing the web app → malicious
 ```
 
 `multi_indicator.json` makes one VirusTotal call for the EICAR hash. Its IP and domain are reserved documentation values, so they are skipped and never sent to an API. Expected verdict: malicious.
@@ -120,6 +132,39 @@ Be careful with live indicators:
 - **API quota:** each live run uses your quota (the VirusTotal free tier allows 4 requests per minute). Running the same alert again within 24 hours uses the cache.
 - **Old entries:** feed entries go stale. An IP that was malicious last month may come back clean or suspicious now.
 
+## Web app
+
+A FastAPI backend and a single-screen web app: paste an alert (or load a sample) on the left, press **Triage** or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd>, and the triage card appears on the right.
+
+```bash
+uvicorn api.main:app --reload            # http://127.0.0.1:8000, demo mode
+ALLOW_LIVE=1 uvicorn api.main:app        # also allows live lookups (uses your API quota)
+```
+
+| Route | What it does |
+|---|---|
+| `POST /api/triage` | Body: an alert as JSON. Response: the `TriageResult`. Add `?live=true` for live lookups. |
+| `GET /api/samples` | The sample alerts in `alerts/` (name + JSON), for the page's "Load sample" menu. |
+| `GET /api/health` | `ok`, which API keys are configured (booleans only), and whether live lookups are allowed. |
+
+### Demo vs live
+
+**Demo is the default** and makes no network calls at all. Indicators already in the local cache are served from it (marked `cached`). Anything that would need an API call is marked `demo: not looked up`, and like any skip it doesn't count toward the verdict. The local checks still run, so a documentation IP still says "documentation range" and a malformed hash still says it's invalid. Behavior analysis always runs, because it's local.
+
+**Live** needs both `?live=true` on the request (the "Live lookups" checkbox) **and** `ALLOW_LIVE=1` in the server's environment. Without `ALLOW_LIVE=1`, a live request is refused with 403 and nothing is looked up.
+
+Demo mode is a `Cache` subclass (`api/demo.py`) whose cache misses never call the lookup function. `triage()` only reaches the network through the cache, so the core didn't change to support it.
+
+### Security choices
+
+- **Keys stay server-side.** `.env` is loaded once at startup. Keys are only ever sent in request headers to VirusTotal and AbuseIPDB. No response, log line or error message includes one. `/api/health` reports booleans only.
+- **Strict input.** Bodies over 32 KB get a 413 (checked against Content-Length *and* while reading, for chunked uploads). The alert is validated by a strict subclass of `Alert`: unknown fields are rejected, every string is length-capped, and validation errors name the field without echoing the value. Only `application/json` is accepted, which also blocks cross-site form posts.
+- **Rate limits per client IP.** 10 triages a minute, and 2 a minute with live lookups (live also counts toward the 10), with a `Retry-After` header. The limiter is in memory (`api/ratelimit.py`). With several workers or containers each one counts separately (so a client gets N× the limit), a restart resets it, and behind a reverse proxy every user shares the proxy's IP. Before scaling out, move it to Redis or the proxy.
+- **Local and same-origin by default.** uvicorn binds to 127.0.0.1 unless you pass `--host`. There is no CORS middleware, so browsers refuse cross-origin reads.
+- **Security headers on every response, errors included:** a Content-Security-Policy allowing only this origin's own scripts, styles, fonts and images (no inline script, no third-party origins, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. The font (IBM Plex, OFL) is self-hosted in `web/fonts/`.
+- **Generic errors.** Clients get short messages like "Internal server error". Tracebacks go to the server log only. `/docs` and `/openapi.json` are turned off.
+- **The alert is treated as hostile.** The frontend builds every value with `textContent` and DOM nodes. `innerHTML` and its relatives are banned, and a test checks for them. Outbound links are only built for known origins (VirusTotal, AbuseIPDB, MITRE ATT&CK). `alerts/xss_probe.json` puts `<script>`, `<img onerror>` and `<svg onload>` payloads into the hostname, user, command line, decoded command and domain. They all render as visible text.
+
 ## Project layout
 
 ```
@@ -137,6 +182,11 @@ data/attack_techniques.json  Generated from MITRE STIX (committed)
 scripts/update_attack.py     Regenerates the ATT&CK data
 triage.py               triage(alert) -> TriageResult; combines intel + behavior
 cli.py                  Command-line entry point (the only module that prints)
+api/main.py             FastAPI app: routes, body limit, rate limits, security headers
+api/demo.py             DemoCache: triage without network calls
+api/ratelimit.py        In-memory sliding-window rate limiter
+api/schemas.py          Strict request model (unknown fields rejected, lengths capped)
+web/                    The single-screen web app (plain HTML/CSS/JS, self-hosted font)
 alerts/                 Sample alerts (fictional hosts and users)
 tests/                  pytest + respx tests (all HTTP is mocked)
 ```

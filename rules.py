@@ -49,6 +49,8 @@ class RuleError(Exception):
 class Match(NamedTuple):
     field: str
     evidence: str
+    # Where the regex matched inside `evidence`, as (start, end) offsets.
+    highlight: tuple[int, int] = (0, 0)
 
 
 class Condition(BaseModel):
@@ -79,7 +81,8 @@ class Condition(BaseModel):
         found = self._pattern.search(text)
         if found is None:
             return None
-        return [Match(self.field, _snippet(text, found))]
+        evidence, highlight = _snippet(text, found)
+        return [Match(self.field, evidence, highlight)]
 
 
 class MatchGroup(BaseModel):
@@ -176,8 +179,12 @@ def _format_errors(exc: ValidationError) -> str:
     return "\n".join(lines)
 
 
-def _snippet(text: str, found: re.Match) -> str:
-    """The matched text plus a little context on each side, kept short."""
+def _snippet(text: str, found: re.Match) -> tuple[str, tuple[int, int]]:
+    """The matched text plus a little context on each side, kept short.
+
+    Also returns where the match sits inside the snippet, so a UI can
+    highlight exactly the text the rule matched.
+    """
     start = max(0, found.start() - EVIDENCE_CONTEXT_CHARS)
     end = min(len(text), found.end() + EVIDENCE_CONTEXT_CHARS)
     snippet = text[start:end]
@@ -186,4 +193,6 @@ def _snippet(text: str, found: re.Match) -> str:
         end = start + MAX_EVIDENCE_CHARS
     prefix = "…" if start > 0 else ""
     suffix = "…" if end < len(text) else ""
-    return f"{prefix}{snippet}{suffix}"
+    highlight_start = len(prefix) + found.start() - start
+    highlight_end = len(prefix) + min(found.end(), end) - start  # The cap can cut the match.
+    return f"{prefix}{snippet}{suffix}", (highlight_start, highlight_end)

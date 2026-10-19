@@ -1,0 +1,8 @@
+{
+  "hostname": "WS-QA-0001\"><svg onload=alert(1)>",
+  "user": "LAB\\<b>qa.tester</b>",
+  "file_path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+  "command_line": "powershell.exe -w hidden -c \"echo '<script>alert(1)</script>'; iex '<img src=x onerror=alert(document.cookie)>'\" -enc VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnADwAcwBjAHIAaQBwAHQAPgBhAGwAZQByAHQAKAAiAGQAZQBjAG8AZABlAGQAIgApADwALwBzAGMAcgBpAHAAdAA+ACcAOwAgAEkARQBYACAAJwA8AGkAbQBnACAAcwByAGMAPQB4ACAAbwBuAGUAcgByAG8AcgA9AGEAbABlAHIAdAAoAGQAbwBjAHUAbQBlAG4AdAAuAGQAbwBtAGEAaQBuACkAPgAnAA==",
+  "parent_process": "C:\\Windows\\System32\\cmd.exe",
+  "domain": "<script>alert(1)</script>.example"
+}

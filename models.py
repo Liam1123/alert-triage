@@ -86,6 +86,8 @@ class BehaviorFinding(BaseModel):
     severity: Severity
     matched_field: str  # e.g. "command_line", or "parent_process, image"
     evidence: str  # The text that matched, with a little context.
+    # (start, end) character offsets in `evidence` of the text the rules matched.
+    highlights: list[tuple[int, int]] = []
     from_decoded: bool = False  # True if it matched decoded PowerShell, not the raw alert.
 
 

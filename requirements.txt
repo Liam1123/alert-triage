@@ -1,6 +1,8 @@
+fastapi==0.148.0
 httpx==0.28.1
 pydantic==2.14.1
 pytest==9.1.1
 python-dotenv==1.2.4
 PyYAML==6.0.3
 respx==0.23.1
+uvicorn==0.54.0

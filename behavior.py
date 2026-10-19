@@ -10,7 +10,7 @@ from pathlib import Path, PureWindowsPath
 
 import attack
 from models import Alert, BehaviorFinding, Severity, Verdict, VERDICT_RANK
-from rules import Rule, load_rules
+from rules import Match, Rule, load_rules
 
 # How each rule severity affects the verdict. Low findings are listed for
 # context (they're also common in normal admin work) but don't change it.
@@ -198,6 +198,7 @@ def _run_rules(rules: list[Rule], fields: dict[str, str], from_decoded: bool) ->
             continue
 
         matched_fields = list(dict.fromkeys(m.field for m in matches))  # Unique, in order.
+        evidence, highlights = _join_evidence(matches)
         findings.append(
             BehaviorFinding(
                 rule_id=rule.id,
@@ -205,8 +206,23 @@ def _run_rules(rules: list[Rule], fields: dict[str, str], from_decoded: bool) ->
                 techniques=[attack.technique(t) for t in rule.techniques],
                 severity=rule.severity,
                 matched_field=", ".join(matched_fields),
-                evidence=" | ".join(m.evidence for m in matches),
+                evidence=evidence,
+                highlights=highlights,
                 from_decoded=from_decoded,
             )
         )
     return findings
+
+
+def _join_evidence(matches: list[Match]) -> tuple[str, list[tuple[int, int]]]:
+    """Join evidence snippets with " | ", shifting each highlight to its place in the result."""
+    separator = " | "
+    parts: list[str] = []
+    highlights: list[tuple[int, int]] = []
+    offset = 0
+    for m in matches:
+        start, end = m.highlight
+        highlights.append((offset + start, offset + end))
+        parts.append(m.evidence)
+        offset += len(m.evidence) + len(separator)
+    return separator.join(parts), highlights
