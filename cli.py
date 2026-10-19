@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import ValidationError
 
-from models import Alert, TriageResult
+from models import Alert, EnrichmentResult, TriageResult
 from triage import triage
 
 
@@ -37,34 +37,50 @@ def main() -> int:
 
 
 def print_result(result: TriageResult) -> None:
-    alert = result.alert
-
     print("=" * 60)
     print(f"VERDICT: {result.verdict.upper()}")
     print("=" * 60)
 
-    print("\nAlert")
-    for field, value in alert.model_dump().items():
-        if value is not None:
-            print(f"  {field:<15} {value}")
-
-    print("\nEnrichments")
     if not result.enrichments:
-        print("  (none)")
+        print("  (no enrichments)")
     for e in result.enrichments:
-        print(f"  [{e.source}] {e.indicator_type} {e.indicator}")
-        if e.error:
-            print(f"    error:       {e.error}")
-            continue
-        print(f"    detections:  {e.malicious_count}/{e.total_engines}")
-        if e.first_seen:
-            print(f"    first seen:  {e.first_seen:%Y-%m-%d %H:%M} UTC")
-        if e.permalink:
-            print(f"    link:        {e.permalink}")
+        print(f"  {_origin(e):<7} {e.source:<10} {e.indicator_type:<7} {e.indicator}")
+        print(f"          -> {_summary(e)}")
 
     print("\nReasons")
     for reason in result.reasons:
         print(f"  - {reason}")
+
+    print("\nAlert")
+    for field, value in result.alert.model_dump().items():
+        if value is not None:
+            print(f"  {field:<15} {value}")
+
+    links = [e.permalink for e in result.enrichments if e.permalink]
+    if links:
+        print("\nLinks")
+        for link in links:
+            print(f"  {link}")
+
+
+def _origin(e: EnrichmentResult) -> str:
+    """Where the data came from: the cache, a live API call, or nowhere (skip/error)."""
+    if e.cached:
+        return "cached"
+    if e.succeeded():
+        return "live"
+    return "-"
+
+
+def _summary(e: EnrichmentResult) -> str:
+    """A short description of one enrichment's outcome."""
+    if e.skip_reason:
+        return f"skipped: {e.skip_reason}"
+    if e.error:
+        return f"{e.verdict}: {e.error}"
+    if e.score is not None:
+        return f"{e.verdict}: abuse score {e.score}/100, {e.report_count} reports"
+    return f"{e.verdict}: {e.malicious_count}/{e.total_engines} engines"
 
 
 if __name__ == "__main__":

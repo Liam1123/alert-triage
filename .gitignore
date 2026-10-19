@@ -14,3 +14,9 @@ __pycache__/
 .ruff_cache/
 .cache/
 *.cache
+
+# Local enrichment cache (SQLite)
+enrichment_cache.sqlite3*
+
+# Your own live-data test alerts (see README)
+alerts/local/

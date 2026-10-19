@@ -1,0 +1,10 @@
+{
+  "hostname": "WS-HR-0233",
+  "user": "LAB\\d.lindqvist",
+  "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+  "file_path": "C:\\Users\\d.lindqvist\\AppData\\Local\\Temp\\onboarding_form.com",
+  "command_line": "cmd.exe /c %TEMP%\\onboarding_form.com",
+  "parent_process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE",
+  "remote_ip": "198.51.100.77",
+  "domain": "hr-portal-sync.example"
+}
