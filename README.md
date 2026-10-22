@@ -35,6 +35,7 @@ cp .env.example .env
 ## Usage
 
 ```bash
+python cli.py --demo alerts/eicar.json  # demo: no API calls, intel from the local cache only
 python cli.py alerts/eicar.json     # EICAR test file, expected verdict: malicious
 python cli.py alerts/unknown.json   # made-up hash, expected verdict: unknown
 python cli.py alerts/multi_indicator.json  # EICAR hash + documentation IP + .example domain
@@ -45,7 +46,7 @@ python cli.py alerts/certutil_download.json   # certutil -urlcache → malicious
 python cli.py alerts/shadow_delete.json       # vssadmin delete shadows → malicious
 python cli.py alerts/office_macro.json        # WINWORD spawning PowerShell → malicious
 python cli.py alerts/benign_admin.json        # signed admin script from Program Files → clean
-python cli.py alerts/xss_probe.json           # HTML/JS payloads in every field, for testing the web app → malicious
+python cli.py alerts/xss_probe.json           # HTML/JS payloads in every field, for testing the web app → suspicious
 python cli.py alerts/ocsf_clipboard_stager.json  # OCSF export: char-shifted loader that runs the clipboard → malicious
 python cli.py alerts/s1_threat_sample.json       # SentinelOne API response with 3 threats: one card each, then a summary
 python cli.py alerts/renamed_certutil.json       # certutil copied to cu.exe, caught by its PE header name → malicious
@@ -92,6 +93,8 @@ The vendor's classification and confidence are shown with "EDR said: ..."; they 
 A file that holds a JSON list of alerts, or a SentinelOne API response (`{"data": [...], "pagination": ...}`), is triaged alert by alert. Each item is detected on its own, so one list can mix our format, OCSF and SentinelOne threats. The CLI prints every card, then a summary line per alert (verdict, host, title). The API returns a list of results in the same order. Each result's `input_format` says what was detected: `native`, `ocsf` or `s1_threat`.
 
 `multi_indicator.json` makes one VirusTotal call for the EICAR hash. Its IP and domain are reserved documentation values, so they are skipped and never sent to an API. Expected verdict: malicious.
+
+The first line of output says `Mode: demo` or `Mode: live`. `--demo` uses the same no-network path as the web app's demo mode ([`api/demo.py`](api/demo.py)): cached results are served, and anything else is marked `demo: not looked up`. Demo is also the default when neither `VT_API_KEY` nor `ABUSEIPDB_API_KEY` is set (blank counts as unset), since live lookups couldn't run anyway.
 
 Each enrichment line shows `live` (fresh API call), `cached` (from the local cache), or `-` (skipped or failed, so no data).
 

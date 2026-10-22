@@ -69,15 +69,17 @@ def analyze(alert: Alert, rules: list[Rule] | None = None) -> list[BehaviorFindi
 
     findings = _run_rules(rules, _fields_for(alert), decoder=None)
 
-    # Decoded text is a PowerShell script, so it's only a command line. Rules
-    # about parents or file paths can't match it, which is correct.
+    # Decoded text is a PowerShell script (both decoders only handle PowerShell),
+    # so it's a command line run by powershell.exe. Rules about parents or file
+    # paths can't match it, which is correct; rules that need PowerShell to be
+    # running (curl as an alias) can.
     decoded = decode_encoded_command(alert.command_line)
     if decoded:
-        findings += _run_rules(rules, {"command_line": deobfuscate(decoded)}, decoder="encoded_command")
+        findings += _run_rules(rules, _decoded_fields(decoded), decoder="encoded_command")
 
     shifted = decode_char_shift(alert.command_line)
     if shifted:
-        findings += _run_rules(rules, {"command_line": deobfuscate(shifted)}, decoder="char_shift")
+        findings += _run_rules(rules, _decoded_fields(shifted), decoder="char_shift")
 
     return findings
 
@@ -235,6 +237,10 @@ def _fields_for(alert: Alert) -> dict[str, str]:
     if original:
         fields["original_file_name"] = original
     return fields
+
+
+def _decoded_fields(script: str) -> dict[str, str]:
+    return {"command_line": deobfuscate(script), "image": "powershell.exe"}
 
 
 def _image_name(file_path: str | None, command_line: str | None) -> str | None:

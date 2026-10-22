@@ -321,3 +321,74 @@ def test_original_file_name_is_mapped_when_present():
 
 def test_original_file_name_is_none_when_absent():
     assert all(s1_threat.to_alert(t).original_file_name is None for t in load_sample()["data"])
+
+
+# --- CLI demo mode ----------------------------------------------------------------
+
+MULTI_INDICATOR = ALERTS_DIR / "multi_indicator.json"  # A hash, an IP and a domain: live mode would call out.
+
+
+def run_cli_recording_http(monkeypatch, capsys, *args: str) -> tuple[int, str, list]:
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)  # Never read .env in tests.
+    monkeypatch.setattr("sys.argv", ["cli.py", *args])
+    with respx.mock(assert_all_called=False) as mock:
+        mock.route().mock(return_value=httpx.Response(200, json={}))
+        code = cli.main()
+        calls = list(mock.calls)  # Read inside the block: respx clears them on exit.
+    return code, capsys.readouterr().out, calls
+
+
+def test_cli_demo_makes_zero_http_calls(monkeypatch, capsys):
+    code, out, calls = run_cli_recording_http(monkeypatch, capsys, "--demo", str(MULTI_INDICATOR))
+
+    assert code == 0
+    assert calls == []
+    assert out.splitlines()[0] == "Mode: demo (local cache only, no API calls)"
+    assert "demo: not looked up" in out
+
+
+def test_cli_demo_works_after_the_path_too(monkeypatch, capsys):
+    _, out, calls = run_cli_recording_http(monkeypatch, capsys, str(SAMPLE), "--demo")
+
+    assert calls == []
+    assert out.count("Mode: demo") == 1  # Once at the top, not per alert.
+
+
+def test_cli_defaults_to_demo_without_api_keys(monkeypatch, capsys):
+    monkeypatch.delenv("VT_API_KEY")
+    monkeypatch.delenv("ABUSEIPDB_API_KEY")
+
+    code, out, calls = run_cli_recording_http(monkeypatch, capsys, str(MULTI_INDICATOR))
+
+    assert code == 0
+    assert calls == []
+    assert out.splitlines()[0] == "Mode: demo (no API key set, so local cache only, no API calls)"
+
+
+def test_cli_blank_keys_count_as_unset(monkeypatch, capsys):
+    monkeypatch.setenv("VT_API_KEY", "  ")
+    monkeypatch.setenv("ABUSEIPDB_API_KEY", "")
+
+    _, out, calls = run_cli_recording_http(monkeypatch, capsys, str(MULTI_INDICATOR))
+
+    assert calls == []
+    assert out.startswith("Mode: demo")
+
+
+def test_cli_is_live_with_a_key(monkeypatch, capsys):
+    # The conftest sets fake keys; every call goes to the respx mock, never the network.
+    code, out, calls = run_cli_recording_http(monkeypatch, capsys, str(MULTI_INDICATOR))
+
+    assert code == 0
+    assert out.splitlines()[0] == "Mode: live (indicators not in the cache are looked up)"
+    assert calls  # The EICAR hash is looked up.
+
+
+def test_cli_usage_error_exits_2(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["cli.py"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    assert "usage: python cli.py" in capsys.readouterr().err

