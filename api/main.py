@@ -14,10 +14,17 @@ Demo mode is the default: lookups are served from the cache or marked
 "demo: not looked up", and nothing touches the network. Live lookups need
 ?live=true on the request AND ALLOW_LIVE=1 in the server's environment.
 
+PUBLIC_DEMO=1 is the public deploy (render.yaml): demo only, whatever
+ALLOW_LIVE says, with cached intel from data/demo_cache.json in memory,
+client IPs taken from the proxy's X-Forwarded-For, and HSTS. Locally it is
+unset and none of that applies.
+
 API keys never leave the server: no response, log line or error message
 contains one. Clients get short generic errors; details go to the server log.
 """
 
+import functools
+import ipaddress
 import json
 import logging
 import os
@@ -32,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 import adapters
-from api.demo import DemoCache
+from api.demo import DemoCache, FixtureCache
 from api.ratelimit import RateLimiter
 from api.schemas import AlertRequest
 from cache import Cache
@@ -76,13 +83,25 @@ SECURITY_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }
+# Only on the public deploy, which is always HTTPS. Locally it would make the
+# browser insist on HTTPS for 127.0.0.1 for a year.
+HSTS_HEADER = "max-age=31536000; includeSubDomains"
+
+# How many proxies sit in front of the public deploy and append to
+# X-Forwarded-For. Render's proxy is one; the client IP is the entry it added.
+TRUSTED_PROXY_HOPS = 1
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_dotenv()  # Once, at startup. Tests don't run this, so they never see .env.
     logging.basicConfig(level=logging.INFO)
-    logger.info("Live lookups %s", "allowed" if live_allowed() else "disabled (demo only)")
+    if public_demo():
+        logger.info("Public demo: live lookups off, %d cached results from the fixture", len(fixture_cache()))
+        if any(os.environ.get(name, "").strip() for name in API_KEY_NAMES):
+            logger.warning("API keys are set on a public demo; they are never used. Remove them.")
+    else:
+        logger.info("Live lookups %s", "allowed" if live_allowed() else "disabled (demo only)")
     yield
 
 
@@ -100,6 +119,8 @@ async def security_headers(request: Request, call_next):
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
         response = error("Internal server error", 500)
     response.headers.update(SECURITY_HEADERS)
+    if public_demo():
+        response.headers["Strict-Transport-Security"] = HSTS_HEADER
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
@@ -120,18 +141,57 @@ def rate_limited(retry_after: int) -> JSONResponse:
     )
 
 
+def public_demo() -> bool:
+    return os.environ.get("PUBLIC_DEMO", "").strip() == "1"
+
+
 def live_allowed() -> bool:
-    return os.environ.get("ALLOW_LIVE", "").strip() == "1"
+    """ALLOW_LIVE=1, unless this is the public demo, which never looks anything up."""
+    return not public_demo() and os.environ.get("ALLOW_LIVE", "").strip() == "1"
+
+
+@functools.cache
+def fixture_cache() -> FixtureCache:
+    """The public demo's cached intel, read once (at startup, or on first use in tests)."""
+    return FixtureCache()
+
+
+def demo_cache() -> DemoCache:
+    return fixture_cache() if public_demo() else DemoCache()
+
+
+def client_ip(request: Request) -> str:
+    """The address to rate-limit by.
+
+    Locally that's the socket address. On the public demo every request comes
+    from Render's proxy, which appends the address it saw to X-Forwarded-For.
+    Everything to the left of that came from the client and can say anything,
+    so only the entry the proxy added (TRUSTED_PROXY_HOPS from the right) is
+    used, and only if it's a real IP address.
+    """
+    socket_ip = request.client.host if request.client else "unknown"
+    if not public_demo():
+        return socket_ip
+    entries = [e.strip() for header in request.headers.getlist("x-forwarded-for") for e in header.split(",")]
+    if len(entries) < TRUSTED_PROXY_HOPS:
+        return socket_ip
+    candidate = entries[-TRUSTED_PROXY_HOPS]
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return socket_ip
 
 
 @app.post("/api/triage")
 async def triage_alert(request: Request, live: bool = False):
-    client = request.client.host if request.client else "unknown"
+    client = client_ip(request)
 
     retry_after = triage_limiter.check(client)
     if retry_after is not None:
         return rate_limited(retry_after)
 
+    if live and public_demo():
+        return error("Live lookups are off on this public demo", 403)
     if live and not live_allowed():
         return error("Live lookups are disabled on this server", 403)
 
@@ -175,7 +235,7 @@ async def triage_alert(request: Request, live: bool = False):
         if retry_after is not None:
             return rate_limited(retry_after)
 
-    cache = None if live else DemoCache()  # None → triage() uses the real Cache and live lookups.
+    cache = None if live else demo_cache()  # None → triage() uses the real Cache and live lookups.
     try:
         results = await run_in_threadpool(triage_all, alerts, cache)
     except Exception:
@@ -242,6 +302,7 @@ def health():
         "status": "ok",
         "keys": {name: bool(os.environ.get(name, "").strip()) for name in API_KEY_NAMES},
         "live_allowed": live_allowed(),
+        "public_demo": public_demo(),
     }
 
 

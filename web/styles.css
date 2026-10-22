@@ -47,6 +47,7 @@
 
   --gutter: 24px;
   --bar-height: 56px;
+  --foot-height: 0px; /* The public demo's footer line; see .site-foot. */
 }
 
 * { box-sizing: border-box; }
@@ -115,7 +116,7 @@ code, kbd, pre, textarea { font-family: var(--mono); font-size: var(--size-small
 .workspace {
   display: grid;
   grid-template-columns: minmax(400px, 5fr) 7fr;
-  height: calc(100vh - var(--bar-height));
+  height: calc(100vh - var(--bar-height) - var(--foot-height));
 }
 
 .editor-pane {
@@ -455,6 +456,21 @@ button.secondary:hover { background: var(--surface-2); }
 .fields dd { font-family: var(--mono); font-size: var(--size-small); overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .card-foot { padding: 14px 28px; background: var(--surface-2); font-size: var(--size-small); }
+
+/* ---- Public demo footer ------------------------------------------------- */
+
+.is-public-demo { --foot-height: 40px; }
+.site-foot {
+  display: flex;
+  align-items: center;
+  min-height: var(--foot-height);
+  padding: 8px var(--gutter);
+  background: var(--surface-2);
+  font-size: var(--size-small);
+}
+.site-foot[hidden] { display: none; }
+.site-foot a { margin-left: 8px; white-space: nowrap; }
+.live-toggle[hidden] { display: none; }
 
 /* ---- Phone ------------------------------------------------------------ */
 

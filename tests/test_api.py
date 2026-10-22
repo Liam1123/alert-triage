@@ -278,6 +278,7 @@ def test_health_reports_keys_as_booleans_only():
         "status": "ok",
         "keys": {"VT_API_KEY": True, "ABUSEIPDB_API_KEY": True},
         "live_allowed": False,
+        "public_demo": False,
     }
     assert "test-vt-key" not in response.text
     assert "test-abuseipdb-key" not in response.text

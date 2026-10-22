@@ -6,6 +6,19 @@ An alert enrichment and triage assistant for SOC analysts. It takes an EDR-style
 
 **Sources:** VirusTotal (file hashes, IPs, domains) and AbuseIPDB (IPs). Results are cached locally in SQLite for 24 hours.
 
+## Live demo
+
+**https://triage.liammahone.com** runs the web app in public demo mode. Paste an alert, open a JSON file, or pick a sample, and you get the same triage card as locally: behavior rules, ATT&CK techniques, decoded commands and the verdict all run for real.
+
+What's different is the threat intel. The demo never calls VirusTotal or AbuseIPDB. Cached results come from [`data/demo_cache.json`](data/demo_cache.json), which holds one real VirusTotal result for the public EICAR test hash, taken from a live lookup on 2026-10-19. Every other hash is marked "demo: not looked up", and documentation IPs and `.example` domains are skipped as usual. The sample alerts are fictional.
+
+There are no API keys on the server, on purpose. A public page that can trigger live lookups would let anyone spend my API quota, send their own indicators to third-party services under my account, and turn the server into a lookup proxy. A demo that never calls out has nothing to steal and nothing to abuse. `PUBLIC_DEMO=1` enforces that: live mode is refused with 403 even if `ALLOW_LIVE=1` is set, the live toggle is hidden, and `/api/health` reports `"public_demo": true`. To try live lookups, run it locally with your own keys (see [Setup](#setup)).
+
+Deploy notes ([`render.yaml`](render.yaml)):
+- It's a Render free web service: `uvicorn api.main:app --host 0.0.0.0 --port $PORT`, health check `/api/health`. `python -m api` picks the same bind from `PUBLIC_DEMO`, and locally it keeps 127.0.0.1.
+- Behind Render's proxy every request comes from the proxy, so rate limits use the rightmost `X-Forwarded-For` entry, the one the proxy appends. Entries to its left come from the client and are never trusted. If it isn't a valid IP, the socket address is used.
+- HSTS is sent on the public demo only, and `/robots.txt` lets the page be indexed but not `/api/`.
+
 ## Screenshots
 
 ![Triage card for multi_indicator.json: malicious verdict from a cached VirusTotal hit plus an Outlook-spawns-cmd behavior rule](docs/screenshots/1440-multi_indicator.png)
@@ -254,7 +267,10 @@ adapters/ocsf.py        OCSF Detection Finding → Alert (auto-detected by the C
 adapters/s1_threat.py   SentinelOne threat (legacy console/API JSON) → Alert
 adapters/common.py      Field helpers shared by the adapters
 api/main.py             FastAPI app: routes, body limit, rate limits, security headers
-api/demo.py             DemoCache: triage without network calls
+api/demo.py             DemoCache: triage without network calls; FixtureCache for the public demo
+api/__main__.py         python -m api: binds 127.0.0.1, or 0.0.0.0:$PORT with PUBLIC_DEMO=1
+data/demo_cache.json    The public demo's intel: one VirusTotal result for the EICAR hash
+render.yaml             Render Blueprint for the public demo (no secrets)
 api/ratelimit.py        In-memory sliding-window rate limiter
 api/schemas.py          Strict request model (unknown fields rejected, lengths capped)
 web/                    The single-screen web app (plain HTML/CSS/JS, self-hosted font)

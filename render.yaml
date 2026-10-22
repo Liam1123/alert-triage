@@ -1,0 +1,22 @@
+# Render Blueprint for the public demo at https://triage.liammahone.com.
+#
+# Demo only by design: PUBLIC_DEMO=1 forces demo mode (no live lookups, even
+# if ALLOW_LIVE is set), serves intel from data/demo_cache.json, rate-limits
+# by the X-Forwarded-For entry Render's proxy adds, and sends HSTS. There are
+# no API keys here and none should be added: the demo never calls an API.
+services:
+  - type: web
+    name: alert-triage
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    domains:
+      - triage.liammahone.com
+    envVars:
+      - key: PUBLIC_DEMO
+        value: "1"
+      # The oldest version CI tests (3.12 and 3.14).
+      - key: PYTHON_VERSION
+        value: "3.12.12"

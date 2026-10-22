@@ -57,6 +57,7 @@ const fileInput = $("file-input");
 
 const samples = new Map();
 let busy = false;
+let publicDemo = false; // Set from /api/health.
 let retryTimer = null;
 
 // ---- DOM helper -------------------------------------------------------------
@@ -439,9 +440,10 @@ function renderResult(result, live, list = null) {
 }
 
 function modeFoot(live) {
-  return el("p", { class: "card-foot", text: live
-    ? "Live mode: indicators not in the cache were looked up just now."
-    : "Demo mode: intel comes from the local cache only. Nothing was sent to any API." });
+  let text = "Demo mode: intel comes from the local cache only. Nothing was sent to any API.";
+  if (live) text = "Live mode: indicators not in the cache were looked up just now.";
+  if (publicDemo) text = "Public demo: intel comes from bundled sample data only. Nothing was sent to any API.";
+  return el("p", { class: "card-foot", text });
 }
 
 function verdictBand(result) {
@@ -818,7 +820,9 @@ async function loadHealth() {
     const response = await fetch("/api/health");
     if (!response.ok) return;
     const health = await response.json();
-    if (health.live_allowed) {
+    if (health.public_demo) {
+      showPublicDemo();
+    } else if (health.live_allowed) {
       liveCheckbox.disabled = false;
       $("live-off").remove();
     } else {
@@ -827,6 +831,16 @@ async function loadHealth() {
   } catch {
     // Stay in demo mode with the toggle disabled.
   }
+}
+
+// The public deploy never looks anything up, so there's no toggle to offer.
+function showPublicDemo() {
+  publicDemo = true;
+  $("live-toggle").hidden = true;
+  $("mode-name").textContent = "Public demo";
+  $("mode-note").textContent = "Intel comes from bundled sample data only. No API calls.";
+  $("site-foot").hidden = false;
+  document.body.classList.add("is-public-demo");
 }
 
 function updateMode() {

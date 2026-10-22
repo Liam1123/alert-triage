@@ -1,0 +1,4 @@
+# The page may be indexed; the API is for the page itself.
+User-agent: *
+Allow: /
+Disallow: /api/
