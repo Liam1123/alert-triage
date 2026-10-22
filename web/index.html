@@ -28,15 +28,19 @@
     <section class="editor-pane" aria-labelledby="editor-title">
       <div class="pane-head">
         <h2 id="editor-title" class="pane-title">Alert JSON</h2>
-        <label class="sample-picker">
-          <span class="visually-hidden">Load a sample alert</span>
-          <select id="samples">
-            <option value="">Load sample…</option>
-          </select>
-        </label>
+        <div class="pane-actions">
+          <button type="button" class="secondary" id="open-file">Open JSON file</button>
+          <input type="file" id="file-input" accept=".json,application/json" hidden>
+          <label class="sample-picker">
+            <span class="visually-hidden">Load a sample alert</span>
+            <select id="samples">
+              <option value="">Load sample…</option>
+            </select>
+          </label>
+        </div>
       </div>
 
-      <div class="editor" id="editor">
+      <div class="editor" id="editor" data-drop-label="Drop the JSON file to open it">
         <div class="gutter" id="gutter" aria-hidden="true"></div>
         <textarea id="alert-input" spellcheck="false" autocomplete="off" autocapitalize="off"
                   wrap="off" aria-describedby="editor-status shortcut-hint"
@@ -59,8 +63,8 @@
       <!-- Filled by app.js. This is the empty state, shown until the first triage. -->
       <div class="state" id="empty-state">
         <h2 id="card-title" class="state-title">Nothing triaged yet</h2>
-        <p>Paste an EDR alert as JSON on the left, or load a sample, then press Triage.
-          The verdict appears here with the reasons behind it, every behavior rule that matched,
+        <p>Paste an EDR alert as JSON on the left, open or drop a JSON file onto the editor,
+          or load a sample, then press Triage. The verdict appears here with the reasons behind it, every behavior rule that matched,
           the ATT&amp;CK tactics involved, and what threat intel says about each indicator.</p>
         <div class="try">
           <h3 class="section-title">Try a sample</h3>
@@ -71,7 +75,8 @@
           <dl class="anatomy-list">
             <dt>Overall verdict</dt>
             <dd>Malicious, suspicious, unknown or clean: the worst verdict from behavior and intel.
-              For an OCSF alert, what the EDR said is shown next to it.</dd>
+              For an OCSF finding or a SentinelOne threat, what the EDR said is shown next to it,
+              with the format that was detected.</dd>
             <dt>Why</dt>
             <dd>One sentence per finding and lookup, with the ones that decided the verdict first.</dd>
             <dt>Behavior findings</dt>
@@ -90,8 +95,10 @@
             <code>user</code>, <code>sha256</code>, <code>file_path</code>, <code>command_line</code>,
             <code>parent_process</code>, <code>remote_ip</code> and <code>domain</code>.
             Any other field is rejected.
-            An OCSF finding (with <code>finding_info</code> and <code>evidences</code>, as some EDRs export)
-            is accepted too and converted to these fields.</p>
+            An OCSF finding (with <code>finding_info</code> and <code>evidences</code>) and a
+            SentinelOne threat (with <code>threatInfo</code>) are accepted too and converted to these fields.</p>
+          <p>A list of up to 25 alerts, or a SentinelOne API response (<code>{"data": [...]}</code>),
+            is triaged one by one and shown as a list. Files can be up to 64 KB.</p>
         </div>
       </div>
     </section>

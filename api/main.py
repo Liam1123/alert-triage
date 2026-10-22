@@ -3,7 +3,9 @@
 Run it with:  uvicorn api.main:app --reload   (binds to 127.0.0.1 by default)
 
 Routes:
-  POST /api/triage[?live=true]  body: an Alert, or an OCSF finding, as JSON  →  a TriageResult
+  POST /api/triage[?live=true]  body: one alert as JSON (ours, an OCSF finding, or a
+                                SentinelOne threat) → a TriageResult; or a list of them
+                                (or a SentinelOne {"data": [...]} response) → a list
   GET  /api/samples             the sample alerts in alerts/
   GET  /api/health              ok, which API keys are set (booleans), live allowed?
   /                             the web app in web/, as static files
@@ -33,6 +35,8 @@ import adapters
 from api.demo import DemoCache
 from api.ratelimit import RateLimiter
 from api.schemas import AlertRequest
+from cache import Cache
+from models import Alert, InputFormat, TriageResult
 from triage import triage
 
 logger = logging.getLogger("api")
@@ -46,11 +50,15 @@ WEB_DIR = ROOT / "web"
 # to a few tens of KB. 64 KB fits those with room to spare; the strict field
 # caps in api/schemas.py still apply after conversion.
 MAX_BODY_BYTES = 64 * 1024
+# A list of alerts is triaged one by one in a single request.
+MAX_ALERTS = 25
 API_KEY_NAMES = ["VT_API_KEY", "ABUSEIPDB_API_KEY"]
 
-# Every triage counts against the first limiter. A live triage also counts
-# against the second, because it spends real API quota (VirusTotal's free
-# tier allows 4 lookups a minute, and one alert can need three).
+# Every triage request counts once against the first limiter, however many
+# alerts it holds: demo triage never leaves the machine. A live triage also
+# counts against the second, once per alert, because each one spends real API
+# quota (VirusTotal's free tier allows 4 lookups a minute, and one alert can
+# need three).
 triage_limiter = RateLimiter(limit=10, window_seconds=60)
 live_limiter = RateLimiter(limit=2, window_seconds=60)
 
@@ -124,12 +132,8 @@ async def triage_alert(request: Request, live: bool = False):
     if retry_after is not None:
         return rate_limited(retry_after)
 
-    if live:
-        if not live_allowed():
-            return error("Live lookups are disabled on this server", 403)
-        retry_after = live_limiter.check(client)
-        if retry_after is not None:
-            return rate_limited(retry_after)
+    if live and not live_allowed():
+        return error("Live lookups are disabled on this server", 403)
 
     # Requiring JSON also blocks cross-site form posts: a browser can send a
     # text/plain form to any origin without asking, but application/json from
@@ -147,20 +151,45 @@ async def triage_alert(request: Request, live: bool = False):
     except (ValueError, RecursionError):  # Some Python builds raise RecursionError on [[[[... nesting.
         return error("Request body is not valid JSON", 400)
 
-    try:
-        alert = AlertRequest.model_validate(adapters.alert_fields(data)).to_alert()
-    except ValidationError as exc:
-        return error("Invalid alert", 422, extra={"errors": field_errors(exc)})
+    items = adapters.split(data)
+    if items is not None:
+        if not items:
+            return error("The list has no alerts in it", 422)
+        if len(items) > MAX_ALERTS:
+            return error(f"Too many alerts: at most {MAX_ALERTS} per request", 422)
+        if live and len(items) > live_limiter.limit:
+            return error(f"Live lookups take at most {live_limiter.limit} alerts per request", 422)
+
+    alerts = []
+    for index, item in enumerate(items if items is not None else [data]):
+        try:
+            alert = AlertRequest.model_validate(adapters.alert_fields(item)).to_alert()
+        except ValidationError as exc:
+            prefix = f"[{index}]" if items is not None else ""
+            return error("Invalid alert", 422, extra={"errors": field_errors(exc, prefix)})
+        alerts.append((adapters.detect_format(item), alert))
+
+    if live:
+        # Charged only now, so a live request that was refused above costs nothing.
+        retry_after = live_limiter.check(client, cost=len(alerts))
+        if retry_after is not None:
+            return rate_limited(retry_after)
 
     cache = None if live else DemoCache()  # None → triage() uses the real Cache and live lookups.
     try:
-        result = await run_in_threadpool(triage, alert, cache)
+        results = await run_in_threadpool(triage_all, alerts, cache)
     except Exception:
         # triage() is designed never to raise; if it does, it's a bug, so log it.
         logger.exception("triage() raised")
         return error("Internal server error", 500)
 
-    return JSONResponse(result.model_dump(mode="json"))
+    body = [result.model_dump(mode="json") for result in results]
+    return JSONResponse(body if items is not None else body[0])
+
+
+def triage_all(alerts: list[tuple[InputFormat, Alert]], cache: Cache | None) -> list[TriageResult]:
+    """Triage each alert in turn, noting the format it arrived in."""
+    return [triage(alert, cache).model_copy(update={"input_format": input_format}) for input_format, alert in alerts]
 
 
 async def read_limited_body(request: Request) -> bytes | None:
@@ -181,11 +210,15 @@ async def read_limited_body(request: Request) -> bytes | None:
     return bytes(body)
 
 
-def field_errors(exc: ValidationError) -> list[dict]:
-    """Which fields were wrong and why. Never echoes the submitted values."""
+def field_errors(exc: ValidationError, prefix: str = "") -> list[dict]:
+    """Which fields were wrong and why. Never echoes the submitted values.
+
+    `prefix` says which alert of a list, e.g. "[2]" → "[2].hostname".
+    """
     errors = []
     for e in exc.errors()[:10]:
-        field = ".".join(str(part)[:64] for part in e["loc"]) or "(body)"
+        field = ".".join(str(part)[:64] for part in e["loc"])
+        field = ".".join(part for part in (prefix, field) if part) or "(body)"
         errors.append({"field": field, "message": e["msg"]})
     return errors
 

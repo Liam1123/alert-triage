@@ -136,6 +136,8 @@ code, kbd, pre, textarea { font-family: var(--mono); font-size: var(--size-small
 }
 
 .pane-title { font-size: var(--size-heading); font-weight: 600; }
+.pane-actions { display: flex; align-items: center; gap: 8px; }
+.pane-actions button.secondary { min-height: 36px; }
 
 select, button {
   font: inherit;
@@ -162,6 +164,22 @@ select:hover { border-color: var(--ink-2); }
 }
 .editor:focus-within { border-color: var(--ink); }
 .editor.has-error { border-color: var(--danger); }
+
+/* Dragging a file over the editor. The label comes from data-drop-label. */
+.editor { position: relative; }
+.editor.is-dropping { border-color: var(--ink); }
+.editor.is-dropping::after {
+  content: attr(data-drop-label);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  outline: 2px dashed var(--ink);
+  outline-offset: -10px;
+  font-weight: 600;
+  pointer-events: none;
+}
 
 .gutter {
   overflow: hidden;
@@ -289,6 +307,7 @@ button.secondary:hover { background: var(--surface-2); }
 .verdict-subject { font-size: var(--size-heading); overflow-wrap: anywhere; }
 .verdict-basis { margin-top: 4px; }
 .verdict-edr { margin-top: 12px; max-width: 72ch; overflow-wrap: anywhere; }
+.verdict-format { margin-top: 4px; font-size: var(--size-small); }
 
 .verdict--malicious { background: var(--danger); color: var(--danger-ink); border-bottom-color: var(--danger); }
 .verdict--suspicious { background: var(--danger-tint); color: var(--danger-tint-ink); border-bottom-color: var(--danger-tint); }
@@ -313,6 +332,49 @@ button.secondary:hover { background: var(--surface-2); }
 .tag--malicious, .tag--high { background: var(--danger); color: var(--danger-ink); }
 .tag--suspicious, .tag--medium { background: var(--danger-tint); color: var(--danger-tint-ink); }
 .tag--clean, .tag--low, .tag--context { background: var(--surface); color: var(--ink); outline: 1px solid var(--line); outline-offset: -1px; }
+
+/* A list of triaged alerts: one row per alert, the whole row is the button. */
+.list-head { padding: 24px 28px; }
+.list-title { font-size: 2rem; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 6px; }
+.alert-list { list-style: none; padding: 0; }
+.alert-row {
+  display: grid;
+  grid-template-columns: 96px minmax(120px, 200px) 1fr auto;
+  gap: 12px;
+  align-items: baseline;
+  width: 100%;
+  padding: 12px 28px;
+  background: var(--surface);
+  border: 0;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  cursor: pointer;
+}
+.alert-row:hover { background: var(--surface-2); }
+.alert-row:focus-visible { outline-offset: -2px; }
+.alert-row .tag { justify-self: start; }
+.row-host { font-weight: 600; overflow-wrap: anywhere; }
+.row-title { overflow-wrap: anywhere; }
+.row-open { font-size: var(--size-small); text-decoration: underline; text-underline-offset: 3px; }
+.list-card .card-foot { border-top: 1px solid var(--line); }
+
+/* Above a card opened from a list. */
+.card-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 28px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.card-nav button.secondary { min-height: 36px; }
+.card-nav button.secondary:disabled { border-color: var(--line); color: var(--ink-2); cursor: default; background: var(--surface); }
+.card-position { margin-right: auto; font-size: var(--size-small); }
+
+/* EDR indicators */
+.edr-indicators { padding-left: 18px; }
+.edr-indicators li + li { margin-top: 4px; }
 
 /* Reasons */
 .reasons { list-style: none; padding: 0; }
@@ -417,6 +479,21 @@ button.secondary:hover { background: var(--surface-2); }
   .verdict { padding: 18px 16px 20px; }
   .card-section { padding: 18px 16px; }
   .card-foot { padding: 12px 16px; }
+
+  .pane-head { flex-wrap: wrap; }
+  .pane-actions { flex: 1 1 100%; }
+  .pane-actions button.secondary { white-space: nowrap; }
+  .sample-picker, .sample-picker select { flex: 1; min-width: 0; width: 100%; }
+
+  .list-head { padding: 18px 16px; }
+  .list-title { font-size: 1.5rem; }
+  .alert-row { grid-template-columns: auto 1fr; gap: 4px 12px; padding: 12px 16px; }
+  .row-host { grid-column: 2; }
+  .row-title { grid-column: 1 / -1; }
+  .row-open { display: none; }
+  /* Two rows: back and position, then previous and next side by side. */
+  .card-nav { display: grid; grid-template-columns: 1fr 1fr; padding: 10px 16px; }
+  .card-position { justify-self: end; margin-right: 0; }
 
   .reasons li { grid-template-columns: 1fr; gap: 4px; }
   .reasons .tag { justify-self: start; }

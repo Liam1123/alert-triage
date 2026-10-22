@@ -47,6 +47,7 @@ python cli.py alerts/office_macro.json        # WINWORD spawning PowerShell → 
 python cli.py alerts/benign_admin.json        # signed admin script from Program Files → clean
 python cli.py alerts/xss_probe.json           # HTML/JS payloads in every field, for testing the web app → malicious
 python cli.py alerts/ocsf_clipboard_stager.json  # OCSF export: char-shifted loader that runs the clipboard → malicious
+python cli.py alerts/s1_threat_sample.json       # SentinelOne API response with 3 threats: one card each, then a summary
 ```
 
 ### OCSF alerts
@@ -66,6 +67,28 @@ The CLI and the API also accept an OCSF Detection Finding, the shape some EDRs (
 `\Device\HarddiskVolumeN\` paths become `C:\`. Missing, empty, or wrongly typed fields become None, and the adapter never raises. The command line falls back to the parent's because a detection on a written file (a dropped `.ps1`) has no command line of its own. The interesting one is the process that wrote or ran it.
 
 `source_detection` is what the EDR itself said. It's shown as "EDR said: ..." next to our verdict, and it never changes our verdict. `alerts/ocsf_clipboard_stager.json` is entirely fictional: the host, user, IDs, vendor and hash are all made up.
+
+### SentinelOne threats
+
+The legacy SentinelOne threat JSON (the console's threat export, and what `GET /web/api/v2.1/threats` returns) is detected by its `threatInfo` object and goes through [`adapters/s1_threat.py`](adapters/s1_threat.py):
+
+| SentinelOne threat | Alert field |
+|---|---|
+| `agentRealtimeInfo.agentComputerName`, else `agentDetectionInfo.agentComputerName` | `hostname` (`(unknown host)` if none) |
+| `threatInfo.processUser` | `user` |
+| `threatInfo.sha256` | `sha256` |
+| `threatInfo.filePath` | `file_path` |
+| `threatInfo.maliciousProcessArguments` | `command_line` |
+| `threatInfo.originatorProcess` | `parent_process` |
+| `threatInfo.threatName`, `.classification`, `.confidenceLevel`, `.detectionEngines[].title` (or `.engines[]`), `.storyline`, and `indicators[]` | `source_detection` |
+
+The vendor's classification and confidence are shown with "EDR said: ..."; they don't change our verdict, so the card can say Clean where the EDR says Trojan (the second threat in the sample does: in demo mode its hash isn't looked up, and running from Downloads is context only). The first 10 indicators are kept, each cut to 200 characters. Paths get the same `\Device\HarddiskVolumeN\` → `C:\` treatment as OCSF, and the adapter never raises.
+
+`alerts/s1_threat_sample.json` is entirely fictional: account, site and agent IDs are made-up numbers and `00000000-…` UUIDs, the IPs are documentation ranges, the only URL (inside an encoded command) is on a `.example` host, and each hash is the SHA-256 of a plain sentence describing the sample, so it can't be a real file's.
+
+### Several alerts at once
+
+A file that holds a JSON list of alerts, or a SentinelOne API response (`{"data": [...], "pagination": ...}`), is triaged alert by alert. Each item is detected on its own, so one list can mix our format, OCSF and SentinelOne threats. The CLI prints every card, then a summary line per alert (verdict, host, title). The API returns a list of results in the same order. Each result's `input_format` says what was detected: `native`, `ocsf` or `s1_threat`.
 
 `multi_indicator.json` makes one VirusTotal call for the EICAR hash. Its IP and domain are reserved documentation values, so they are skipped and never sent to an API. Expected verdict: malicious.
 
@@ -157,7 +180,11 @@ Be careful with live indicators:
 
 ## Web app
 
-A FastAPI backend and a single-screen web app: paste an alert (or load a sample) on the left, press **Triage** or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd>, and the triage card appears on the right.
+A FastAPI backend and a single-screen web app: paste an alert (or load a sample) on the left, press **Triage** or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd>, and the triage card appears on the right. The card says which format was detected ("Detected: SentinelOne threat").
+
+**Files:** **Open JSON file**, or drop one onto the editor. The browser reads it with `FileReader`, puts the text in the editor and triages it. Files over 64 KB, files that aren't text, and invalid JSON are refused with a message naming the file. The text only ever goes into the textarea, never into the page as HTML.
+
+**Lists:** a list (up to 25 alerts) comes back as a compact list of verdict, host and title. A row opens that alert's full card, with **Previous**/**Next** and a way back to the list.
 
 ```bash
 uvicorn api.main:app --reload            # http://127.0.0.1:8000, demo mode
@@ -166,7 +193,7 @@ ALLOW_LIVE=1 uvicorn api.main:app        # also allows live lookups (uses your A
 
 | Route | What it does |
 |---|---|
-| `POST /api/triage` | Body: an alert as JSON. Response: the `TriageResult`. Add `?live=true` for live lookups. |
+| `POST /api/triage` | Body: one alert as JSON (ours, OCSF, or a SentinelOne threat), or a list of up to 25 (or a SentinelOne `{"data": [...]}` response). Response: the `TriageResult`, or a list of them. Add `?live=true` for live lookups. |
 | `GET /api/samples` | The sample alerts in `alerts/` (name + JSON), for the page's "Load sample" menu. |
 | `GET /api/health` | `ok`, which API keys are configured (booleans only), and whether live lookups are allowed. |
 
@@ -182,7 +209,7 @@ Demo mode is a `Cache` subclass (`api/demo.py`) whose cache misses never call th
 
 - **Keys stay server-side.** `.env` is loaded once at startup. Keys are only ever sent in request headers to VirusTotal and AbuseIPDB. No response, log line or error message includes one. `/api/health` reports booleans only.
 - **Strict input.** Bodies over 64 KB get a 413. That's enough for a realistic OCSF export (typically a few KB to a few tens of KB). The strict field caps still apply after conversion. The size is checked against Content-Length *and* while reading, for chunked uploads. The alert is validated by a strict subclass of `Alert`: unknown fields are rejected, every string is length-capped, and validation errors name the field without echoing the value. Only `application/json` is accepted, which also blocks cross-site form posts.
-- **Rate limits per client IP.** 10 triages a minute, and 2 a minute with live lookups (live also counts toward the 10), with a `Retry-After` header. The limiter is in memory (`api/ratelimit.py`). With several workers or containers each one counts separately (so a client gets N× the limit), a restart resets it, and behind a reverse proxy every user shares the proxy's IP. Before scaling out, move it to Redis or the proxy.
+- **Rate limits per client IP.** 10 triage requests a minute, and 2 alerts a minute with live lookups (live also counts toward the 10), with a `Retry-After` header. A list counts once toward the 10, since demo triage never leaves the machine, but once *per alert* toward the live limit, since each alert spends API quota. So a live request takes at most 2 alerts, and longer lists are refused with a 422 before anything is spent. A list is capped at 25 alerts, and the 64 KB body limit covers the whole list. The limiter is in memory (`api/ratelimit.py`). With several workers or containers each one counts separately (so a client gets N× the limit), a restart resets it, and behind a reverse proxy every user shares the proxy's IP. Before scaling out, move it to Redis or the proxy.
 - **Local and same-origin by default.** uvicorn binds to 127.0.0.1 unless you pass `--host`. There is no CORS middleware, so browsers refuse cross-origin reads.
 - **Security headers on every response, errors included:** a Content-Security-Policy allowing only this origin's own scripts, styles, fonts and images (no inline script, no third-party origins, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. The font (IBM Plex, OFL) is self-hosted in `web/fonts/`.
 - **Generic errors.** Clients get short messages like "Internal server error". Tracebacks go to the server log only. `/docs` and `/openapi.json` are turned off.
@@ -205,7 +232,10 @@ data/attack_techniques.json  Generated from MITRE STIX (committed)
 scripts/update_attack.py     Regenerates the ATT&CK data
 triage.py               triage(alert) -> TriageResult; combines intel + behavior
 cli.py                  Command-line entry point (the only module that prints)
+adapters/__init__.py    split() lists, detect_format(), alert_fields(): what the CLI and API call
 adapters/ocsf.py        OCSF Detection Finding → Alert (auto-detected by the CLI and API)
+adapters/s1_threat.py   SentinelOne threat (legacy console/API JSON) → Alert
+adapters/common.py      Field helpers shared by the adapters
 api/main.py             FastAPI app: routes, body limit, rate limits, security headers
 api/demo.py             DemoCache: triage without network calls
 api/ratelimit.py        In-memory sliding-window rate limiter

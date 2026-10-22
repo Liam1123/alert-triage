@@ -217,3 +217,14 @@ def test_cli_accepts_ocsf(monkeypatch, capsys):
     assert "EDR said: Unsigned PowerShell script written to Themes folder (High," in out
     assert PAYLOAD in out
     assert "(in char-shift-decoded command)" in out
+
+
+def test_partial_ocsf_keeps_what_is_there():
+    data = {"finding_info": {"title": "Suspicious script"}, "evidences": [{"process": {"cmd_line": "wscript.exe a.js"}}]}
+
+    alert = ocsf.to_alert(data)
+
+    assert alert.hostname == ocsf.UNKNOWN_HOST
+    assert alert.command_line == "wscript.exe a.js"
+    assert alert.sha256 is alert.user is alert.file_path is None
+    assert alert.source_detection == SourceDetection(title="Suspicious script")

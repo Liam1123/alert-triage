@@ -9,6 +9,10 @@
 "use strict";
 
 const DEMO_SKIP_REASON = "demo: not looked up"; // Matches api/demo.py.
+const MAX_FILE_BYTES = 64 * 1024; // MAX_BODY_BYTES in api/main.py.
+const MAX_ALERTS = 25; // MAX_ALERTS in api/main.py.
+// Mirrors FORMAT_NAMES in cli.py.
+const FORMAT_NAMES = { native: "native", ocsf: "SentinelOne OCSF", s1_threat: "SentinelOne threat" };
 
 const SOURCE_NAMES = { virustotal: "VirusTotal", abuseipdb: "AbuseIPDB" };
 const TYPE_NAMES = { sha256: "hash", ip: "IP", domain: "domain" };
@@ -48,6 +52,7 @@ const editorStatus = $("editor-status");
 const triageButton = $("triage-button");
 const cardPane = $("card-pane");
 const liveCheckbox = $("live");
+const fileInput = $("file-input");
 
 const samples = new Map();
 let busy = false;
@@ -141,10 +146,12 @@ function offsetOf(text, line, column) {
   return offset + column - 1;
 }
 
-function parseEditor() {
+// The parsed JSON, or null after showing why it can't be sent. `fileName` is
+// set when the text came from a file, so the message can say which.
+function parseEditor(fileName = null) {
   const text = input.value;
   if (!text.trim()) {
-    showEditorError("The editor is empty. Paste an alert as JSON, or load a sample.");
+    showEditorError(fileName ? `${fileName} is empty.` : "The editor is empty. Paste an alert as JSON, or load a sample.");
     return null;
   }
   let alert;
@@ -156,30 +163,50 @@ function parseEditor() {
     const reason = String(error.message)
       .replace(/\s*\(line \d+ column \d+\)/, "")
       .replace(/ in JSON at position \d+/, "")
-      .replace(/^JSON\.parse: /, "");
+      .replace(/^JSON\.parse: /, "")
+      .replace(/, (\.\.\.)?".*" is not valid JSON$/s, ""); // Chrome quotes the text around the error; we point at it instead.
+    const what = fileName ? `${fileName} is not valid JSON` : "Invalid JSON";
     if (where) {
-      showEditorError(`Invalid JSON on line ${where.line}, column ${where.column}: ${reason}.`, [], where.line);
+      showEditorError(`${what}: line ${where.line}, column ${where.column}: ${reason}.`, [], where.line);
       const offset = where.offset ?? offsetOf(text, where.line, where.column);
       input.focus();
       input.setSelectionRange(offset, Math.min(offset + 1, text.length));
     } else {
-      showEditorError(`Invalid JSON: ${reason}.`);
+      showEditorError(`${what}: ${reason}.`);
     }
     return null;
   }
-  if (alert === null || typeof alert !== "object" || Array.isArray(alert)) {
-    showEditorError("An alert must be a JSON object, like { \"hostname\": \"WS-01\" }.");
+  if (alert === null || typeof alert !== "object") {
+    showEditorError("An alert must be a JSON object, like { \"hostname\": \"WS-01\" }, or a list of them.");
+    return null;
+  }
+  const list = alertList(alert);
+  if (list && !list.length) {
+    showEditorError("The list has no alerts in it.");
+    return null;
+  }
+  if (list && list.length > MAX_ALERTS) {
+    showEditorError(`This list has ${list.length} alerts. The server triages at most ${MAX_ALERTS} at a time, ` +
+      "so split it into smaller files.");
     return null;
   }
   return alert;
 }
 
+// The alerts in a list or a SentinelOne {"data": [...]} response, or null for
+// one alert. Mirrors adapters.split().
+function alertList(json) {
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json.data)) return json.data;
+  return null;
+}
+
 // ---- Talking to the API -------------------------------------------------------
 
-async function runTriage() {
+async function runTriage(fileName = null) {
   if (busy || retryTimer) return;
   clearEditorStatus();
-  const alert = parseEditor();
+  const alert = parseEditor(fileName);
   if (!alert) return;
 
   setBusy(true);
@@ -208,6 +235,10 @@ async function runTriage() {
   }
   setBusy(false);
 
+  if (response.ok && Array.isArray(body)) {
+    renderList(body, live);
+    return;
+  }
   if (response.ok && body) {
     renderResult(body, live);
     return;
@@ -221,8 +252,15 @@ function handleError(response, body) {
     const seconds = Number(response.headers.get("Retry-After")) || Number(body?.retry_after) || 60;
     showRateLimited(seconds);
   } else if (status === 422 && Array.isArray(body?.errors)) {
+    // In a list, fields are named "[2].hostname": say it as "Alert 3, hostname".
     showEditorError("The alert doesn't match the expected fields:",
-      body.errors.map((e) => `${e.field}: ${e.message}`));
+      body.errors.map((e) => `${fieldName(e.field)}: ${e.message}`));
+    restoreCard();
+  } else if (status === 422 && typeof body?.detail === "string") {
+    // A list-level problem (empty, too long, too long for live mode). The
+    // server's messages are fixed strings, never parts of the input.
+    showEditorError(sentence(body.detail) + (liveCheckbox.checked && /^Live/.test(body.detail)
+      ? " Untick Live lookups to triage the whole list in demo mode." : ""));
     restoreCard();
   } else if (status === 413) {
     showEditorError("This alert is larger than the server accepts (64 KB). Trim the long fields and try again.");
@@ -257,7 +295,8 @@ function setCard(node) {
 
 function showLoading(alert) {
   lastCard = cardPane.querySelector("article.card") || cardPane.firstElementChild;
-  const host = typeof alert.hostname === "string" ? alert.hostname : "this alert";
+  const list = alertList(alert);
+  const host = list ? plural(list.length, "alert") : typeof alert.hostname === "string" ? alert.hostname : "this alert";
   setCard(el("div", { class: "state is-loading" },
     el("h2", { class: "state-title", text: "Triaging…", attrs: { id: "card-title" } }),
     el("p", { text: `Running behavior rules and intel lookups for ${host}.` }),
@@ -314,12 +353,75 @@ function showRateLimited(seconds) {
   }, 1000);
 }
 
+// ---- A list of results --------------------------------------------------------
+
+// One row per alert in file order: verdict, host, title. A row opens that
+// alert's full card; the card's Back button returns here.
+function renderList(results, live, focusIndex = null) {
+  const counts = ["malicious", "suspicious", "unknown", "clean"]
+    .map((verdict) => [verdict, results.filter((r) => r.verdict === verdict).length])
+    .filter(([, n]) => n > 0)
+    .map(([verdict, n]) => `${n} ${verdict}`);
+
+  const rows = results.map((result, index) => {
+    const button = el("button", { class: "alert-row", attrs: { type: "button" } },
+      tag(result.verdict),
+      el("span", { class: "row-host", text: result.alert.hostname }),
+      el("span", { class: "row-title", text: alertTitle(result) }),
+      el("span", { class: "row-open", text: "Open", attrs: { "aria-hidden": "true" } }),
+    );
+    button.addEventListener("click", () => renderResult(result, live, { results, index }));
+    return el("li", {}, button);
+  });
+
+  const card = el("article", { class: "card list-card", attrs: { "aria-labelledby": "card-title" } },
+    el("header", { class: "list-head" },
+      el("h2", { class: "list-title", text: `${plural(results.length, "alert")} triaged`, attrs: { id: "card-title" } }),
+      el("p", { text: `${counts.join(", ")}. Select an alert to open its card.` }),
+    ),
+    el("ul", { class: "alert-list" }, ...rows),
+    modeFoot(live),
+  );
+  setCard(card);
+  cardPane.scrollTop = 0;
+  if (focusIndex !== null) rows[focusIndex].querySelector("button").focus();
+}
+
+// The EDR's title, else the first behavior finding, else a plain note.
+// Mirrors alert_title() in cli.py.
+function alertTitle(result) {
+  if (result.alert.source_detection?.title) return result.alert.source_detection.title;
+  if (result.behavior_findings.length) return result.behavior_findings[0].rule_name;
+  return "No behavior rule matched";
+}
+
+// Back to the list, and previous/next, above a card opened from a list.
+function listNav(list, live) {
+  const { results, index } = list;
+  const button = (text, onClick, disabled = false) => {
+    const b = el("button", { class: "secondary", text, attrs: { type: "button" } });
+    b.disabled = disabled;
+    b.addEventListener("click", onClick);
+    return b;
+  };
+  const open = (i) => renderResult(results[i], live, { results, index: i });
+  return el("nav", { class: "card-nav", attrs: { "aria-label": "Alerts in this list" } },
+    button(`← All ${results.length} alerts`, () => renderList(results, live, index)),
+    el("span", { class: "card-position", text: `Alert ${index + 1} of ${results.length}` }),
+    button("Previous", () => open(index - 1), index === 0),
+    button("Next", () => open(index + 1), index === results.length - 1),
+  );
+}
+
 // ---- The triage card ----------------------------------------------------------
 
-function renderResult(result, live) {
+// `list` is { results, index } when the card was opened from a list.
+function renderResult(result, live, list = null) {
   const card = el("article", { class: "card", attrs: { "aria-labelledby": "card-title" } },
+    list ? listNav(list, live) : null,
     verdictBand(result),
     reasonsSection(result),
+    edrIndicatorsSection(result.alert.source_detection),
     findingsSection(result.behavior_findings),
     decodedSection("Decoded PowerShell command", result.decoded_command,
       "Decoded from the -EncodedCommand argument. Never executed."),
@@ -328,12 +430,17 @@ function renderResult(result, live) {
     tacticsSection(result.tactics),
     intelSection(result.enrichments),
     alertSection(result.alert),
-    el("p", { class: "card-foot", text: live
-      ? "Live mode: indicators not in the cache were looked up just now."
-      : "Demo mode: intel comes from the local cache only. Nothing was sent to any API." }),
+    modeFoot(live),
   );
   setCard(card);
   cardPane.scrollTop = 0;
+  if (list) card.querySelector(".card-nav button").focus();
+}
+
+function modeFoot(live) {
+  return el("p", { class: "card-foot", text: live
+    ? "Live mode: indicators not in the cache were looked up just now."
+    : "Demo mode: intel comes from the local cache only. Nothing was sent to any API." });
 }
 
 function verdictBand(result) {
@@ -352,14 +459,17 @@ function verdictBand(result) {
     el("p", { class: "verdict-subject", text: subject }),
     el("p", { class: "verdict-basis", text: basis }),
     edrSaid(alert.source_detection),
+    el("p", { class: "verdict-format", text: `Detected: ${FORMAT_NAMES[result.input_format] || "native"}` }),
   );
 }
 
-// What the EDR itself called this alert (from an OCSF export), shown next to
-// our verdict for comparison. It never changes our verdict.
+// What the EDR itself called this alert (from an OCSF finding or a SentinelOne
+// threat), shown next to our verdict for comparison. It never changes our verdict.
 function edrSaid(detection) {
   if (!detection) return null;
-  const details = [detection.severity, detection.analytic].filter(Boolean).join(", ");
+  const confidence = detection.confidence ? `${detection.confidence} confidence` : null;
+  const details = [detection.severity, detection.classification, confidence, detection.analytic]
+    .filter(Boolean).join(", ");
   const title = detection.title || "(no title)";
   return el("p", { class: "verdict-edr" },
     el("strong", { text: "EDR said: " }),
@@ -418,6 +528,15 @@ function enrichmentSentence(e) {
       ` an abuse confidence of ${e.score}/100 from ${plural(e.report_count, "report")}.`]];
   }
   return [verdict, verdict, [`${e.malicious_count} of ${e.total_engines} ${source} engines flag ${type} `, indicator, "."]];
+}
+
+function edrIndicatorsSection(detection) {
+  const indicators = detection?.indicators || [];
+  if (!indicators.length) return null;
+  return section("EDR indicators",
+    el("ul", { class: "edr-indicators" }, ...indicators.map((text) => el("li", { text }))),
+    el("p", { class: "code-note", text: "As the EDR reported them. Context only; they don't change the verdict." }),
+  );
 }
 
 function findingsSection(findings) {
@@ -534,6 +653,9 @@ function alertSection(alert) {
     if (value === null || value === undefined || value === "") continue;
     rows.push(el("dt", { text: label }), el("dd", { text: value }));
   }
+  // SentinelOne's ID for the chain of events, for pivoting in the console.
+  const storyline = alert.source_detection?.storyline;
+  if (storyline) rows.push(el("dt", { text: "Storyline" }), el("dd", { text: storyline }));
   return section("Alert fields", el("dl", { class: "fields" }, ...rows));
 }
 
@@ -562,6 +684,13 @@ function shortIndicator(e) {
   return e.indicator_type === "sha256" && value.length > 20 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value;
 }
 
+// "[2].hostname" → "Alert 3, hostname"; plain field names are left alone.
+function fieldName(field) {
+  const match = /^\[(\d+)\]\.?(.*)$/.exec(field);
+  if (!match) return field;
+  return match[2] ? `Alert ${Number(match[1]) + 1}, ${match[2]}` : `Alert ${Number(match[1]) + 1}`;
+}
+
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
@@ -575,6 +704,76 @@ function sentence(text) {
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
+// ---- Opening files --------------------------------------------------------------
+
+// Read a file the analyst chose or dropped, put its text in the editor, and
+// triage it. The text only ever goes into the textarea's value, never into
+// the page as HTML.
+function openFile(file) {
+  if (!file) return;
+  if (file.size > MAX_FILE_BYTES) {
+    showEditorError(`${file.name} is ${kilobytes(file.size)}. Files can be at most 64 KB, the most the server accepts.`);
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const text = String(reader.result);
+    // A NUL or an undecodable byte means this isn't a text file; leave the editor alone.
+    if (/[\u0000\uFFFD]/.test(text)) {
+      showEditorError(`${file.name} doesn't look like a text file. Open a .json file.`);
+      return;
+    }
+    input.value = text;
+    input.scrollTop = 0;
+    $("samples").value = "";
+    clearEditorStatus();
+    runTriage(file.name);
+  });
+  reader.addEventListener("error", () => showEditorError(`${file.name} couldn't be read.`));
+  reader.readAsText(file);
+}
+
+function hasFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
+
+function initFileDrop() {
+  $("open-file").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    openFile(fileInput.files[0]);
+    fileInput.value = ""; // So choosing the same file again still fires "change".
+  });
+
+  editor.addEventListener("dragover", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    editor.classList.add("is-dropping");
+  });
+  editor.addEventListener("dragleave", (event) => {
+    if (!editor.contains(event.relatedTarget)) editor.classList.remove("is-dropping");
+  });
+  editor.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return; // Dropped text is left to the textarea.
+    event.preventDefault();
+    editor.classList.remove("is-dropping");
+    const files = event.dataTransfer.files;
+    if (files.length > 1) {
+      showEditorError("Drop one file at a time. For several alerts, put them in one JSON list.");
+      return;
+    }
+    openFile(files[0]);
+  });
+  // A file dropped anywhere else would make the browser open it in place of the app.
+  for (const type of ["dragover", "drop"]) {
+    document.addEventListener(type, (event) => { if (hasFiles(event)) event.preventDefault(); });
+  }
+}
+
+function kilobytes(bytes) {
+  return `${Math.ceil(bytes / 1024)} KB`;
+}
+
 // ---- Samples, health, keyboard -----------------------------------------------
 
 function loadSample(name) {
@@ -586,7 +785,7 @@ function loadSample(name) {
 }
 
 function sampleLabel(name) {
-  const words = name.replace(/_/g, " ").replace(/powershell/i, "PowerShell").replace(/^xss/i, "XSS").replace(/^ocsf/i, "OCSF");
+  const words = name.replace(/_/g, " ").replace(/powershell/i, "PowerShell").replace(/^xss/i, "XSS").replace(/^ocsf/i, "OCSF").replace(/^s1/i, "SentinelOne");
   return capitalize(words);
 }
 
@@ -605,7 +804,7 @@ async function loadSamples() {
   }
 
   const tryButtons = $("try-buttons");
-  for (const name of ["encoded_powershell", "multi_indicator", "ocsf_clipboard_stager", "office_macro", "benign_admin"]) {
+  for (const name of ["encoded_powershell", "multi_indicator", "ocsf_clipboard_stager", "s1_threat_sample", "office_macro", "benign_admin"]) {
     if (!samples.has(name) || !tryButtons) continue;
     const button = el("button", { class: "secondary", text: sampleLabel(name), attrs: { type: "button" } });
     button.addEventListener("click", () => { loadSample(name); runTriage(); });
@@ -659,6 +858,7 @@ function init() {
   $("samples").addEventListener("change", (event) => loadSample(event.target.value));
   liveCheckbox.addEventListener("change", updateMode);
 
+  initFileDrop();
   updateGutter();
   loadSamples();
   loadHealth();

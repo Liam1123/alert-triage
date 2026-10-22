@@ -36,18 +36,24 @@ class RateLimiter:
         self._hits: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
-    def check(self, key: str) -> int | None:
-        """Record a request. Returns None if allowed, else seconds until a retry would be."""
+    def check(self, key: str, cost: int = 1) -> int | None:
+        """Record a request worth `cost` hits. Returns None if allowed, else seconds until a retry would be.
+
+        A cost above the limit can never be allowed; callers refuse those first.
+        """
         now = self.clock()
         with self._lock:
             hits = self._hits.setdefault(key, deque())
             while hits and now - hits[0] >= self.window_seconds:
                 hits.popleft()
 
-            if len(hits) >= self.limit:
-                return max(1, math.ceil(self.window_seconds - (now - hits[0])))
+            excess = len(hits) + cost - self.limit
+            if excess > 0:
+                # Wait until enough of the oldest hits have left the window.
+                oldest_needed = hits[min(excess, len(hits)) - 1] if hits else now
+                return max(1, math.ceil(self.window_seconds - (now - oldest_needed)))
 
-            hits.append(now)
+            hits.extend([now] * cost)
             if len(self._hits) > PRUNE_THRESHOLD:
                 self._prune(now)
             return None
