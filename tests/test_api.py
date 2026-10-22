@@ -591,3 +591,20 @@ def test_rate_limiter_cost():
     assert limiter.check("a") is None  # One hit still fits.
     assert limiter.check("a", cost=5) == 60  # More than the limit: never allowed, but never raises.
     assert RateLimiter(limit=1).check("b", cost=2) == 60
+
+
+# --- original_file_name ------------------------------------------------------------
+
+def test_renamed_certutil_sample_is_malicious_via_the_api():
+    body = post_triage(load("renamed_certutil.json")).json()
+
+    assert body["verdict"] == "malicious"
+    assert body["alert"]["original_file_name"] == "certutil.exe"
+    assert {"certutil_download", "renamed_system_binary"} <= {f["rule_id"] for f in body["behavior_findings"]}
+
+
+def test_original_file_name_is_length_capped():
+    response = post_triage({"hostname": "WS-01", "original_file_name": "a" * 300})
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["field"] == "original_file_name"

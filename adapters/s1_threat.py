@@ -8,6 +8,7 @@ return, not OCSF. The parts used here:
     threatInfo.processUser                       → user (already DOMAIN\\name)
     threatInfo.sha256                            → sha256
     threatInfo.filePath                          → file_path
+    threatInfo.originalFileName                  → original_file_name (see ORIGINAL_NAME_KEY)
     threatInfo.maliciousProcessArguments         → command_line
     threatInfo.originatorProcess                 → parent_process (a process name)
     threatInfo.threatName, .classification,
@@ -29,6 +30,10 @@ from models import Alert, SourceDetection
 # API model caps the list at 25 items of 256 characters; these stay inside it.
 MAX_INDICATORS = 10
 MAX_INDICATOR_LENGTH = 200
+
+# The PE OriginalFileName. Not confirmed against SentinelOne's API reference:
+# check the key name in a real threat and change it here if needed.
+ORIGINAL_NAME_KEY = "originalFileName"
 
 
 def is_s1_threat(data: object) -> bool:
@@ -54,6 +59,7 @@ def to_alert(data: dict) -> Alert:
         user=text(info.get("processUser")),
         sha256=sha256(info.get("sha256")),
         file_path=path(info.get("filePath")),
+        original_file_name=text(info.get(ORIGINAL_NAME_KEY)),
         command_line=path(info.get("maliciousProcessArguments")),
         parent_process=path(info.get("originatorProcess")),
         source_detection=_source_detection(info, data.get("indicators")),

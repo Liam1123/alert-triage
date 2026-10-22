@@ -228,3 +228,13 @@ def test_partial_ocsf_keeps_what_is_there():
     assert alert.command_line == "wscript.exe a.js"
     assert alert.sha256 is alert.user is alert.file_path is None
     assert alert.source_detection == SourceDetection(title="Suspicious script")
+
+
+def test_original_file_name_is_mapped_when_present():
+    alert = ocsf.to_alert(finding(file={"path": r"C:\Users\Public\cu.exe", ocsf.ORIGINAL_NAME_KEY: " certutil.exe "}))
+
+    assert alert.original_file_name == "certutil.exe"
+
+
+def test_original_file_name_is_none_when_absent():
+    assert ocsf.to_alert(load_sample()).original_file_name is None

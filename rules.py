@@ -18,6 +18,10 @@ A rule looks like this in rules/behavior_rules.yaml:
 one must match). Items are conditions ({field, regex}) or nested groups.
 Regexes are always case-insensitive.
 
+A condition can also say `differs_from: <field>`: then it only matches if
+the two fields hold different file names (compared case-insensitively, with
+a missing ".exe" ignored). If either field is missing, it doesn't match.
+
 A broken rules file is a developer mistake, so load_rules() raises RuleError
 with a message naming the rule and the problem.
 """
@@ -35,7 +39,9 @@ from models import Severity
 
 # The alert data a condition can look at. "image" is the process's file name
 # (e.g. "powershell.exe"), worked out from file_path or the command line.
-MatchField = Literal["command_line", "file_path", "image", "parent_process"]
+# "original_file_name" is the name in the file's PE header (just the file name),
+# which stays the same when the file is renamed.
+MatchField = Literal["command_line", "file_path", "image", "original_file_name", "parent_process"]
 
 # How much context to show around a regex match in the evidence snippet.
 EVIDENCE_CONTEXT_CHARS = 25
@@ -60,6 +66,7 @@ class Condition(BaseModel):
 
     field: MatchField
     regex: str
+    differs_from: MatchField | None = None
     _pattern: re.Pattern = PrivateAttr()
 
     @field_validator("regex")
@@ -71,6 +78,12 @@ class Condition(BaseModel):
             raise ValueError(f"invalid regex {value!r}: {exc}")
         return value
 
+    @model_validator(mode="after")
+    def differs_from_another_field(self) -> Condition:
+        if self.differs_from == self.field:
+            raise ValueError("differs_from must name a different field")
+        return self
+
     def model_post_init(self, context) -> None:
         self._pattern = re.compile(self.regex, re.IGNORECASE)
 
@@ -81,6 +94,10 @@ class Condition(BaseModel):
         found = self._pattern.search(text)
         if found is None:
             return None
+        if self.differs_from:
+            other = fields.get(self.differs_from)
+            if not other or same_file_name(text, other):
+                return None
         evidence, highlight = _snippet(text, found)
         return [Match(self.field, evidence, highlight)]
 
@@ -134,6 +151,16 @@ class Rule(BaseModel):
             if not re.fullmatch(r"T\d{4}(\.\d{3})?", technique_id):
                 raise ValueError(f"{technique_id!r} is not an ATT&CK technique ID like T1059 or T1059.001")
         return ids
+
+
+def same_file_name(a: str, b: str) -> bool:
+    """certutil.exe vs CertUtil.EXE → True. Some version resources leave out the
+    ".exe" (Sysinternals' "procdump"), so a missing one doesn't count as a difference."""
+    return _bare_name(a) == _bare_name(b)
+
+
+def _bare_name(file_name: str) -> str:
+    return file_name.strip().lower().removesuffix(".exe")
 
 
 def load_rules(path: Path) -> list[Rule]:

@@ -230,6 +230,10 @@ def _fields_for(alert: Alert) -> dict[str, str]:
     image = _image_name(fields.get("file_path"), fields.get("command_line"))
     if image:
         fields["image"] = image
+    # Only the file name: rules compare it with the image name, never a path.
+    original = PureWindowsPath(alert.original_file_name[:MAX_TEXT_CHARS].strip()).name if alert.original_file_name else ""
+    if original:
+        fields["original_file_name"] = original
     return fields
 
 

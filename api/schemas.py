@@ -41,6 +41,7 @@ class AlertRequest(Alert):
     user: Short | None = None
     sha256: Annotated[str, StringConstraints(max_length=128)] | None = None
     file_path: Path | None = None
+    original_file_name: Short | None = None
     command_line: CommandLine | None = None
     parent_process: Path | None = None
     remote_ip: Annotated[str, StringConstraints(max_length=64)] | None = None

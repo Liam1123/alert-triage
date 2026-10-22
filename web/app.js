@@ -21,6 +21,7 @@ const FIELD_LABELS = {
   user: "User",
   sha256: "SHA-256",
   file_path: "File path",
+  original_file_name: "Original file name",
   command_line: "Command line",
   parent_process: "Parent process",
   remote_ip: "Remote IP",
@@ -676,7 +677,7 @@ function originOf(e) {
 
 function whereFound(f) {
   if (f.decoder) return DECODER_WHERE[f.decoder] || "decoded command";
-  return f.matched_field.split(", ").map((name) => name.replace("_", " ")).join(" and ");
+  return f.matched_field.split(", ").map((name) => name.replaceAll("_", " ")).join(" and ");
 }
 
 function shortIndicator(e) {

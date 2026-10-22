@@ -7,6 +7,7 @@ EDRs, SentinelOne among them, export. The parts used here:
     severity, or severity_id                → source_detection.severity
     evidences[].process.file.path / .name   → file_path
     evidences[].process.file.hashes[]       → sha256 (the entry with algorithm_id 3)
+    evidences[].process.file.original_name  → original_file_name (see ORIGINAL_NAME_KEY)
     evidences[].process.cmd_line            → command_line
     evidences[].process.parent_process      → parent_process (its image path), and
                                               its cmd_line when the process has none
@@ -28,6 +29,10 @@ from models import Alert, SourceDetection
 __all__ = ["UNKNOWN_HOST", "is_ocsf", "normalize_device_path", "to_alert"]
 
 SHA256_ALGORITHM_ID = 3  # OCSF Fingerprint algorithm_id for SHA-256.
+
+# The PE OriginalFileName. Not confirmed against the OCSF schema or a real
+# SentinelOne export: check the key name there and change it here if needed.
+ORIGINAL_NAME_KEY = "original_name"
 
 # OCSF severity_id labels, for exports that only send the number.
 SEVERITY_LABELS = {
@@ -52,6 +57,7 @@ def to_alert(data: dict) -> Alert:
         user=_user(as_dict(process.get("user"))) or _user(as_dict(as_dict(data.get("actor")).get("user"))),
         sha256=_sha256_entry(file.get("hashes")),
         file_path=path(file.get("path")) or text(file.get("name")),
+        original_file_name=text(file.get(ORIGINAL_NAME_KEY)),
         command_line=path(process.get("cmd_line")) or path(parent.get("cmd_line")),
         parent_process=path(as_dict(parent.get("file")).get("path")) or text(as_dict(parent.get("file")).get("name")),
         source_detection=_source_detection(data),

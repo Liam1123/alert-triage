@@ -54,6 +54,10 @@ class Alert(BaseModel):
     user: str | None = None
     sha256: str | None = None
     file_path: str | None = None
+    # The OriginalFileName from the file's PE version resource, as EDRs report
+    # it (e.g. "certutil.exe" for a copy renamed to cu.exe). Renaming a file
+    # doesn't change it.
+    original_file_name: str | None = None
     command_line: str | None = None
     parent_process: str | None = None
     remote_ip: str | None = None

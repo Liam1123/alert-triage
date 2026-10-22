@@ -9,9 +9,17 @@
 #   match        a group: all_of (every item must match) or any_of (at least one)
 #                Items are conditions {field, regex} or nested groups.
 #
-# Fields:  command_line, file_path, parent_process, image (the process file name)
+# Fields:  command_line, file_path, parent_process, image (the process file name),
+#          original_file_name (the OriginalFileName in the PE header; unlike the
+#          name on disk, renaming the file doesn't change it)
 # Regexes are case-insensitive. YAML single quotes keep backslashes literal;
 # write '' for a literal single quote.
+#
+# A condition with `differs_from: <field>` only matches when the two fields hold
+# different file names (case-insensitive, a missing .exe ignored).
+#
+# Rules about a specific program identify it by image name OR original file
+# name, so a copy renamed to cu.exe is still certutil.
 #
 # Text is deobfuscated before matching: carets (^) and empty quote pairs ("")
 # are removed and repeated whitespace is collapsed, so "p^ow^er""shell" is
@@ -36,6 +44,9 @@ rules:
               regex: '^(powershell|pwsh)(\.exe)?$'
             - field: command_line
               regex: '\b(powershell|pwsh)(\.exe)?\b'
+            # pwsh.exe's version resource names pwsh.dll.
+            - field: original_file_name
+              regex: '^(powershell(\.exe)?|pwsh\.dll)$'
         # PowerShell accepts -, / and Unicode dashes (en dash, em dash, horizontal bar)
         # before a parameter, and any unambiguous prefix of -EncodedCommand.
         - field: command_line
@@ -104,8 +115,11 @@ rules:
     severity: high
     match:
       all_of:
-        - field: command_line
-          regex: '\bcertutil(\.exe)?\b'
+        - any_of:
+            - field: command_line
+              regex: '\bcertutil(\.exe)?\b'
+            - field: original_file_name
+              regex: '^certutil(\.exe)?$'
         - field: command_line
           regex: '[-/](urlcache|decode|decodehex)\b'
 
@@ -120,6 +134,12 @@ rules:
       any_of:
         - field: command_line
           regex: '\bmshta(\.exe)?["'']?\s+["'']?(https?://|vbscript:|javascript:|\S+\.(hta|sct|js|vbs)\b)'
+        # A renamed copy: the PE header says mshta, and an argument is a URL or script.
+        - all_of:
+            - field: original_file_name
+              regex: '^mshta(\.exe)?$'
+            - field: command_line
+              regex: '\s["'']?(https?://|vbscript:|javascript:|\S+\.(hta|sct|js|vbs)\b)'
 
   - id: regsvr32_squiblydoo
     name: Regsvr32 remote scriptlet (Squiblydoo)
@@ -130,8 +150,11 @@ rules:
     severity: high
     match:
       all_of:
-        - field: command_line
-          regex: '\bregsvr32(\.exe)?\b'
+        - any_of:
+            - field: command_line
+              regex: '\bregsvr32(\.exe)?\b'
+            - field: original_file_name
+              regex: '^regsvr32(\.exe)?$'
         - field: command_line
           regex: '[-/]i:'
         - any_of:
@@ -155,6 +178,8 @@ rules:
               regex: '^rundll32(\.exe)?$'
             - field: command_line
               regex: '\brundll32(\.exe)?\b'
+            - field: original_file_name
+              regex: '^rundll32(\.exe)?$'
         - any_of:
             - field: command_line
               regex: '\\(temp|tmp|appdata|downloads|programdata)\\|%(temp|tmp|appdata|localappdata|programdata)%'
@@ -230,8 +255,33 @@ rules:
       any_of:
         - field: command_line
           regex: '\bprocdump(64)?(\.exe)?\b.*\blsass\b'
+        # A renamed procdump (Sysinternals' version resource says "procdump").
+        - all_of:
+            - field: original_file_name
+              regex: '^procdump(64)?(\.exe)?$'
+            - field: command_line
+              regex: '\blsass\b'
         - field: command_line
           regex: '\bcomsvcs(\.dll)?\b.*(minidump|#\s*24\b)'
+
+  - id: renamed_system_binary
+    name: Renamed system binary
+    description: >
+      The PE header says this is a Windows or Sysinternals tool (certutil,
+      mshta, regsvr32, rundll32, powershell, cmd, procdump, wscript, cscript),
+      but the file on disk has another name. Renaming a built-in tool is how
+      attackers slip past rules and allowlists that go by file name, and
+      legitimate software almost never does it.
+    techniques: [T1036.003]
+    severity: high
+    match:
+      all_of:
+        - field: original_file_name
+          regex: '^(certutil|mshta|regsvr32|rundll32|powershell|cmd|procdump(64)?|wscript|cscript)(\.exe)?$'
+          differs_from: image
+        # Not a check: puts the name on disk next to the original in the evidence.
+        - field: image
+          regex: '.+'
 
   - id: discovery_commands
     name: Discovery commands

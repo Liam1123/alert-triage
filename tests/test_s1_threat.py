@@ -310,3 +310,14 @@ def test_sample_is_not_modified_by_conversion():
         s1_threat.to_alert(t)
 
     assert data == before
+
+
+def test_original_file_name_is_mapped_when_present():
+    alert = s1_threat.to_alert(threat(filePath=r"C:\Users\Public\cu.exe", **{s1_threat.ORIGINAL_NAME_KEY: "certutil.exe"}))
+
+    assert alert.original_file_name == "certutil.exe"
+    assert "renamed_system_binary" in {f.rule_id for f in triage(alert).behavior_findings}
+
+
+def test_original_file_name_is_none_when_absent():
+    assert all(s1_threat.to_alert(t).original_file_name is None for t in load_sample()["data"])

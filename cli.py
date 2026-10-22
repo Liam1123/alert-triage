@@ -112,7 +112,7 @@ def print_result(result: TriageResult) -> None:
     print("\nAlert")
     for field, value in result.alert.model_dump(exclude={"source_detection"}).items():
         if value is not None:
-            print(f"  {field:<15} {value}")
+            print(f"  {field:<18} {value}")  # Wide enough for original_file_name.
 
     links = [e.permalink for e in result.enrichments if e.permalink]
     if links:

@@ -136,3 +136,49 @@ def test_check_rules_script_reports_invalid_rules(tmp_path):
 
     [problem] = check_rules.problems(path)
     assert "Invalid rule 'test_rule'" in problem
+
+
+# --- original_file_name and differs_from ---------------------------------------
+
+RENAME_RULE = VALID_RULE.replace(
+    "        - field: command_line\n          regex: 'foo'\n",
+    "        - field: original_file_name\n          regex: '^certutil'\n          differs_from: image\n",
+)
+
+
+def test_original_file_name_is_a_matchable_field(tmp_path):
+    body = VALID_RULE.replace("field: command_line", "field: original_file_name")
+
+    assert load_rules(write_rules(tmp_path, body))[0].match.all_of[0].field == "original_file_name"
+
+
+@pytest.mark.parametrize("fields, matches", [
+    ({"original_file_name": "certutil.exe", "image": "cu.exe"}, True),
+    ({"original_file_name": "certutil.exe", "image": "CERTUTIL.EXE"}, False),
+    ({"original_file_name": "certutil", "image": "certutil.exe"}, False),
+    ({"original_file_name": "certutil.exe"}, False),  # Nothing to compare with.
+    ({"image": "cu.exe"}, False),
+])
+def test_differs_from(tmp_path, fields, matches):
+    rule = load_rules(write_rules(tmp_path, RENAME_RULE))[0]
+
+    assert (rule.match.evaluate(fields) is not None) is matches
+
+
+def test_differs_from_the_same_field_is_rejected(tmp_path):
+    body = RENAME_RULE.replace("differs_from: image", "differs_from: original_file_name")
+
+    with pytest.raises(RuleError, match="differs_from must name a different field"):
+        load_rules(write_rules(tmp_path, body))
+
+
+def test_differs_from_an_unknown_field_is_rejected(tmp_path):
+    with pytest.raises(RuleError, match="differs_from"):
+        load_rules(write_rules(tmp_path, RENAME_RULE.replace("differs_from: image", "differs_from: name")))
+
+
+def test_renamed_rule_uses_t1036_003_under_stealth():
+    rule = next(r for r in behavior.RULES if r.id == "renamed_system_binary")
+
+    assert rule.techniques == ["T1036.003"] and rule.severity == "high"
+    assert attack.technique("T1036.003").tactics == ["Stealth"]
